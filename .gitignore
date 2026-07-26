@@ -1,0 +1,51 @@
+# ─── 构建产物 (CCS / ticlang) ───
+Debug/
+Release/
+*.o
+*.d
+*.map
+*.out
+*.hex
+*.bin
+*.elf
+*.txt
+!README.txt
+*.linkInfo
+*.xml
+!**/targetConfigs/*.ccxml
+ccsObjs.opt
+device.opt
+device.cmd.genlibs
+device_linker.cmd
+makefile
+objects.mk
+sources.mk
+subdir_rules.mk
+subdir_vars.mk
+compile_commands.json
+
+# ─── clangd 索引缓存 ───
+.clangd/
+**/.clangd/.cache/
+
+# ─── IDE 缓存 ───
+.idea/
+.vscode/
+.settings/
+
+# ─── 备份文件 ───
+BSP/backup_*/
+*.bak
+*.backup
+*.old
+
+# ─── Python 缓存 ───
+__pycache__/
+*.pyc
+*.pyo
+
+# ─── 日志/临时文件 ───
+*.log
+*.tmp
+*.swp
+*~
