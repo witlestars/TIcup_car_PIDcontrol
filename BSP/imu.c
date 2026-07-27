@@ -162,7 +162,7 @@ uint8_t IMU_Init(void)
 {
     if (!g_use_imu) { g_imu_present = 0; return 0xFF; }
     s_state = PS_FIND_55; s_data_idx = 0; g_imu_present = 0;
-    while (!DL_UART_Main_isRXFIFOEmpty(UART_IMUUGNST)) {
+    while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
         (void)DL_UART_Main_receiveData(UART_IMU_INST);
     }
     for (uint16_t i = 0; i < 200; i++) {
