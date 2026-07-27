@@ -69,7 +69,11 @@ void UART_Debug_EnableRxIRQ(void)
  * @brief UART0 RX 中断服务程序
  *        用 DL_UART_Main_getPendingInterrupt 自动清 pending 标志 (关键!)
  *        处理两种中断: RX (读 FIFO 字节) + OVERRUN (清错误, 读走 FIFO 防卡死)
- *        echo 开启时: 非阻塞发 hex 到蓝牙串口 (TX FIFO 满就跳过该字节, 不等待)
+ *
+ * @note ISR 内严禁做 echo! 之前在 ISR 里发 hex 到蓝牙串口会导致:
+ *        - ISR 抢蓝牙 TX FIFO, 主循环 CMD_SendText 永远发不出 → 系统卡死
+ *        - ISR 打断主循环正在发的字节, TX 数据被污染 → 串口输出乱码
+ *       echo 改到主循环的 UART_Debug_EchoTick() 里做 (非阻塞, TX 满就跳过)
  *
  * @note 之前用 DL_UART_clearInterruptStatus 没真正清 RX pending,
  *        导致 ISR 反复进但 FIFO 空, while 不执行, 新字节不处理, yaw 卡在 0
@@ -82,7 +86,7 @@ void UART0_IRQHandler(void)
 
     switch (irq) {
     case DL_UART_MAIN_IIDX_RX:
-        /* RX 中断: FIFO 有数据, 全部搬到环形缓冲 */
+        /* RX 中断: FIFO 有数据, 全部搬到环形缓冲 (ISR 只做搬运, 不做 echo) */
         while (!DL_UART_Main_isRXFIFOEmpty(UART_DEBUG_INST)) {
             uint8_t b = (uint8_t)DL_UART_Main_receiveData(UART_DEBUG_INST);
             uint8_t next = (uint8_t)(s_rx_head + 1);
@@ -90,20 +94,7 @@ void UART0_IRQHandler(void)
                 s_rx_buf[s_rx_head] = b;
                 s_rx_head = next;
             }
-            /* 原始字节回显: hex 发到蓝牙串口 (非阻塞, TX 满就跳过, 不影响 ISR 时序) */
-            if (g_uart_debug_echo) {
-                const char h[] = "0123456789ABCDEF";
-                char hex[3];
-                uint8_t i;
-                hex[0] = h[(b >> 4) & 0x0F];
-                hex[1] = h[b & 0x0F];
-                hex[2] = ' ';
-                for (i = 0; i < 3; i++) {
-                    if (!DL_UART_Main_isTXFIFOFull(UART_BLUETOOTH_INST)) {
-                        DL_UART_Main_transmitDataBlocking(UART_BLUETOOTH_INST, (uint8_t)hex[i]);
-                    }
-                }
-            }
+            /* 满则丢弃 (理论上不会发生, 256 字节 / 110字节每秒 远大于消费速度) */
         }
         break;
 
@@ -117,6 +108,39 @@ void UART0_IRQHandler(void)
     default:
         /* 其他中断 (TX 等), 忽略 */
         break;
+    }
+}
+
+/**
+ * @brief 主循环调用: echo 诊断输出 (非阻塞, 移到主循环做, 不在 ISR 做)
+ *        从环形缓冲取字节, 以 hex 发到蓝牙串口 (TX FIFO 满就跳过该字节)
+ *        每次最多发 8 字节 (24 hex 字符), 防止霸占蓝牙 TX
+ * @note  echo 开启时 (g_uart_debug_echo=1) 才工作, 关闭时立即返回
+ */
+void UART_Debug_EchoTick(void)
+{
+    if (!g_uart_debug_echo) return;
+
+    const char h[] = "0123456789ABCDEF";
+    uint8_t budget = 8;   /* 每次最多处理 8 字节, 避免霸占蓝牙 TX */
+    while (budget--) {
+        uint8_t b;
+        if (!UART_Debug_GetByte(&b)) break;   /* 缓冲区空 */
+
+        /* hex 发到蓝牙串口, 非阻塞 (TX FIFO 满就跳过该字符) */
+        char hex[3];
+        hex[0] = h[(b >> 4) & 0x0F];
+        hex[1] = h[b & 0x0F];
+        hex[2] = ' ';
+        for (uint8_t i = 0; i < 3; i++) {
+            if (!DL_UART_Main_isTXFIFOFull(UART_BLUETOOTH_INST)) {
+                DL_UART_Main_transmitDataBlocking(UART_BLUETOOTH_INST, (uint8_t)hex[i]);
+            }
+        }
+    }
+    /* 换行分隔 (非阻塞) */
+    if (!DL_UART_Main_isTXFIFOFull(UART_BLUETOOTH_INST)) {
+        DL_UART_Main_transmitDataBlocking(UART_BLUETOOTH_INST, '\n');
     }
 }
 

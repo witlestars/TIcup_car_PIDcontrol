@@ -28,6 +28,7 @@ void UART_Debug_Send(float *data, uint8_t count);
 
 /* ── JY61P IMU 串口接口 ── */
 void UART_Debug_EnableRxIRQ(void);   /* 启用 RX 中断 (init 后调一次) */
+void UART_Debug_EchoTick(void);      /* 主循环调: echo 诊断输出 (非阻塞) */
 void UART_Debug_PollRx(void);        /* 兼容接口, 中断版下空操作 */
 uint8_t UART_Debug_GetByte(uint8_t *byte_out);
 void UART_Debug_SendBytes(const uint8_t *data, uint8_t len);

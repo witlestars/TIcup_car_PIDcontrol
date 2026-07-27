@@ -122,6 +122,7 @@ int main(void)
         /* ── 高频任务: 每轮执行, 不漏调参命令 ──
          * (JY61P 字节接收已由 UART0_IRQHandler 自动处理, 这里不需要 PollRx) */
         CMD_Poll();            /* 串口调参命令 */
+        UART_Debug_EchoTick(); /* echo 诊断输出 (echo 开启时才工作, 非阻塞) */
 
         /* ── 10ms 节拍: 按钮消抖 + 巡线PID + 电机指令 ── */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10) {
