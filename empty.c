@@ -27,6 +27,7 @@
 #include "BSP/template/motor.h"
 #include "BSP/template/cmd.h"
 #include "BSP/template/uart_bluetooth.h"
+#include "BSP/template/uart_debug.h"
 #include "BSP/imu.h"
 #include "BSP/odometry.h"
 #include "BSP/oled.h"
@@ -41,44 +42,17 @@ static void Driver_Board_Init(void)
     (void)0;
 }
 
-/* ─── IMU↔OLED 互斥切换 (共用 PA17/PA15 软件 I2C) ───
+/* ─── IMU 启用/暂停切换 ───
  * 按钮和串口 'E' 命令都走这个函数, 保证切换逻辑一致
- * 切换时先停用另一方 (g_xxx_present=0, 后续I2C操作自动跳过),
- * 再调用启用方的 Init 重新探测总线, 最后发文本通知电脑
- * use_imu: 1=启用IMU(停用OLED), 0=启用OLED(停用IMU) */
+ * (IMU 已改用串口 UART_DEBUG, 与 OLED 的 I2C 物理隔离, 不再互斥)
+ * use_imu: 1=启用 IMU 解析, 0=暂停 IMU 解析 (OLED 始终独立工作) */
 void switch_mode(uint8_t use_imu)
 {
+    g_use_imu = use_imu;
     if (use_imu) {
-        /* 切到 IMU: 先关 OLED 显示让屏幕黑屏
-         * 必须在 g_use_imu 改之前调 (oled_cmd 内部检查 g_use_imu) */
-        OLED_PowerOff();   /* 发 0xAE, 屏幕立即黑屏 */
-        /* 设置互斥标志 (imu.c/oled.c 内的 I2C 入口都检查这个标志) */
-        g_use_imu = 1;
-        /* 停 OLED: 清标志, 后续 oled_write 直接 return */
-        g_oled_present = 0;
-        /* 启 IMU: IMU_Init 内会重新探测 JY61P */
-        CMD_SendText("[MSPM0] switch -> IMU (OLED off)\n");
-        if (IMU_Init() == 0) {
-            CMD_SendText("[MSPM0] IMU JY61P OK\n");
-        } else {
-            CMD_SendText("[MSPM0] IMU JY61P FAIL (skipped)\n");
-        }
+        CMD_SendText("[MSPM0] IMU enabled (parsing on)\n");
     } else {
-        /* 切到 OLED: 设置互斥标志, IMU 侧 I2C 入口自动跳过 */
-        g_use_imu = 0;
-        /* 停 IMU: 清标志, 后续 IMU_Read_RPY 直接 return 缓存值 */
-        g_imu_present = 0;
-        /* 启 OLED: OLED_Init 内会重新探测 SSD1306 并发 0xAF 点亮 */
-        CMD_SendText("[MSPM0] switch -> OLED (IMU off)\n");
-        OLED_Init();
-        if (g_oled_present) {
-            OLED_Clear();
-            OLED_PrintfAt(0, 0, "==TI CUP==");
-            OLED_PrintfAt(1, 0, "OLED mode");
-            CMD_SendText("[MSPM0] OLED OK\n");
-        } else {
-            CMD_SendText("[MSPM0] OLED FAIL (skipped)\n");
-        }
+        CMD_SendText("[MSPM0] IMU paused (parsing off, OLED unaffected)\n");
     }
 }
 
@@ -99,10 +73,9 @@ int main(void)
     Motor_Init();
     Driver_Board_Init();
 
-    /* ── IMU 初始化 (默认 g_use_imu=1, IMU 占用 PA17/PA15 总线) ──
-     * OLED/IMU 共用同一组软件 I2C, 上电默认走 IMU 模式 (巡线需要 IMU)
-     * 后续可用 BTN_MODE 按钮 或 串口 'E' 命令切换到 OLED 模式 */
-    CMD_SendText("[MSPM0] init: imu (default mode)\n");
+    /* ── IMU 初始化 (串口 UART_DEBUG, PA10/PA11, 9600bps) ──
+     * IMU 和 OLED 物理隔离, 不再互斥, 可同时工作 */
+    CMD_SendText("[MSPM0] init: imu (UART_DEBUG 9600bps)\n");
     if (IMU_Init() == 0) {
         CMD_SendText("[MSPM0] IMU JY61P OK\n");
     } else {
@@ -112,10 +85,14 @@ int main(void)
     CMD_SendText("[MSPM0] init: odom\n");
     Odom_Init();
 
-    /* ── OLED 初始化 (g_use_imu=1 时 OLED_Init 直接跳过, 不抢 I2C) ──
-     * 想用 OLED 时按 MODE 按钮或发 'E0' 切换, switch_mode 会调 OLED_Init */
-    CMD_SendText("[MSPM0] init: oled (skipped, IMU mode)\n");
-    OLED_Init();   /* g_use_imu=1, 内部直接 return, g_oled_present 保持 0 */
+    /* ── OLED 初始化 (PA17/PA15 I2C, 与 IMU 串口物理隔离) ── */
+    CMD_SendText("[MSPM0] init: oled\n");
+    OLED_Init();
+    if (g_oled_present) {
+        OLED_Clear();
+        OLED_PrintfAt(0, 0, "==TI CUP==");
+        OLED_PrintfAt(1, 0, "ready");
+    }
 
     /* ── 按钮初始化: 纯 GPIO, 无 I2C ── */
     CMD_SendText("[MSPM0] init: button\n");
@@ -123,12 +100,18 @@ int main(void)
     CMD_SendText("[MSPM0] init done\n");
 
     /* 巡线在主循环中轮询执行
-     * imu_tick 用作 IMU 降频计数 (每5次=50ms 读一次 IMU) */
+     * imu_tick 用作 IMU 降频计数 (每5次=50ms 解析一次) */
     uint8_t imu_tick = 0;
 
     while (1) {
-        /* ── IMU 轮询: 降频到每 50ms 一次, 仅当 IMU 接了才读 ── */
-        if (g_imu_present && (++imu_tick >= 5)) {
+        /* ── UART_DEBUG RX 搬运: 每周期都调, 把 JY61P 串口字节搬到环形缓冲区
+         *    必须在 IMU_Poll 之前调, 否则 IMU_Poll 取不到最新数据
+         *    g_uart_debug_echo=1 时 PollRx 内部会自动把字节回显到 PC */
+        UART_Debug_PollRx();
+
+        /* ── IMU 解析: 降频到每 50ms 一次, 仅当 IMU 接了且启用才解析 ──
+         *    IMU_Poll 内部从环形缓冲区取字节, 状态机解析 0x55 0x53 帧 */
+        if (g_use_imu && (++imu_tick >= 5)) {
             imu_tick = 0;
             IMU_Poll();
         }
@@ -164,7 +147,8 @@ int main(void)
                 }
                 break;
             case BTN_EVENT_MODE:
-                /* 切换 IMU↔OLED: 取反 g_use_imu, switch_mode 内会发通知给电脑 */
+                /* 切换 IMU 解析开关: 取反 g_use_imu, switch_mode 内会发通知给电脑
+                 * (IMU 改串口后不再与 OLED 互斥, 此按钮只切 IMU 解析) */
                 switch_mode(!g_use_imu);
                 break;
             case BTN_EVENT_RESET:
@@ -193,6 +177,23 @@ int main(void)
             g_motor_r_speed = 0;
         } else if (g_mode == 0) {
             Track_Loop();
+        } else if (g_mode == 3) {
+            /* ── 不倒翁模式 (IMU yaw 自稳): 手转车自动回正到切 m3 时的朝向 ──
+             * 切 m3 时在 cmd.c 的 case 'm' 中锁目标, 这里只做 PID 修正 */
+            float yaw_now = IMU_Get_Yaw_Cached();
+            float err = g_yaw_target - yaw_now;
+            /* 角度回绕: 误差超过 ±180° 时取最短路径 */
+            if (err > 180.0f)  err -= 360.0f;
+            if (err < -180.0f) err += 360.0f;
+            g_yaw_now = yaw_now;
+            g_yaw_err = err;
+            /* 简单 P 控制: P=30 驱动板单位/度, ±400 限幅 */
+            float base = 0.0f;
+            float correction = err * 30.0f;
+            if (correction > 400.0f)  correction = 400.0f;
+            if (correction < -400.0f) correction = -400.0f;
+            g_motor_l_speed = (int16_t)(base - correction);
+            g_motor_r_speed = (int16_t)(base + correction);
         } else {
             g_motor_l_speed = (int16_t)g_target_rpm;
             g_motor_r_speed = (int16_t)g_target_rpm;
@@ -203,6 +204,11 @@ int main(void)
 
         /* ── 接收调参命令 ── */
         CMD_Poll();
+
+        /* ── 第二轮 IMU RX 搬运: 避免 4 字节 FIFO 在 10ms 内溢出 ──
+         * 9600bps 每 10ms 到 ~10 字节, MSPM0 UART FIFO 仅 4 字节,
+         * 单次 PollRx 每周期会丢 ~6 字节。连续两次 = 每 5ms 等效, 不溢出。 */
+        UART_Debug_PollRx();
 
         /* ── 控制刷新率 ~10ms ── */
         delay_ms(10);

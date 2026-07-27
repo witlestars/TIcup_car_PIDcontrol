@@ -19,9 +19,8 @@
 
 /* OLED 在线标志: 1=检测到, 0=未接(所有操作跳过, 避免I2C超时卡死主循环) */
 uint8_t g_oled_present = 0;
-/* g_use_imu 在 imu.c 中定义, 1=IMU占用总线(OLED禁用), 0=OLED占用总线
- * 这里 extern 进来在 oled_write 入口处检查, 防止和 IMU 抢同一组 I2C */
-extern uint8_t g_use_imu;
+/* 注: IMU 已改用串口 (UART_DEBUG, PA10/PA11), 与 OLED 的 I2C (PA17/PA15) 物理隔离
+ * 不再需要 g_use_imu 互斥标志, OLED 独立工作 */
 
 /* ─── 8x16 ASCII 字模 (0x20~0x7F, 96个字符) ─── */
 /* 每字符 16 字节 (上半8字节 + 下半8字节, 列扫描) */
@@ -132,7 +131,6 @@ static const uint8_t font8x16[][16] = {
 static void oled_write(uint8_t control, uint8_t data)
 {
     if (!g_oled_present) return;          /* OLED 未接, 跳过避免I2C超时 */
-    if (g_use_imu) return;                /* IMU 占用总线, OLED 跳过避免冲突 */
     i2cWrite(OLED_I2C_ADDR, control, 1, &data);
 }
 
@@ -142,11 +140,6 @@ static void oled_data(uint8_t d) { oled_write(0x40, d); }
 /* ─── 初始化序列 (SSD1306 标准配置, 128x64) ─── */
 void OLED_Init(void)
 {
-    /* IMU 占用总线时, 不初始化 OLED, 避免抢 I2C */
-    if (g_use_imu) {
-        g_oled_present = 0;
-        return;
-    }
     /* 探测 OLED 是否在线: 尝试写一个字节, ACK=0 说明设备存在 */
     uint8_t dummy = 0x00;
     if (i2cWrite(OLED_I2C_ADDR, 0x00, 1, &dummy) != 0) {
@@ -177,9 +170,7 @@ void OLED_Init(void)
     OLED_Clear();
 }
 
-/* 关显示 (发 0xAE, 屏幕黑屏但 GDDRAM 保留)
- * 切换到 IMU 模式前调用, 避免 OLED 残留画面一直亮着
- * 必须在 g_use_imu 改为 1 之前调用 (oled_cmd → oled_write 检查 g_use_imu) */
+/* 关显示 (发 0xAE, 屏幕黑屏但 GDDRAM 保留) */
 void OLED_PowerOff(void)
 {
     if (!g_oled_present) return;

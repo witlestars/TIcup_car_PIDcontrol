@@ -4,12 +4,27 @@
 #include <stdint.h>
 
 /**
- * @brief 通过 UART 发送 float 数组 (VOFA+ JustFloat 协议)
- * @param data   float 数组指针
- * @param count  数组长度
- * @note  在 VOFA+ 中配置: 协议=JustFloat, 通道数=count
- *        需要先在 SysConfig 中添加 UART 模块, 命名为 "UART_DEBUG"
+ * @file uart_debug.h
+ * @brief UART_DEBUG (UART1, PA10=TX, PA11=RX, 9600bps) — JY61P IMU 串口通道
+ *
+ * 历史用途: 原本用于 VOFA+ JustFloat 调试输出 (115200)。
+ * 现在用途: 接维特智能 JY61P IMU 串口 (9600bps 默认)。
+ *   - JY61P TX → MSPM0 PA11 (UART_DEBUG RX)
+ *   - JY61P RX → MSPM0 PA10 (UART_DEBUG TX)  ← 发归零命令用
+ *   - JY61P VCC → 3.3V, GND → 共地
+ *
+ * 接口:
+ *   - UART_Debug_PollRx()  : 主循环调用, 把 RX FIFO 字节搬到环形缓冲区
+ *   - UART_Debug_GetByte() : 从环形缓冲区取 1 字节 (返回1=有数据, 0=空)
+ *   - UART_Debug_SendBytes(): 发 N 字节给 JY61P (用于归零/解锁命令)
+ *   - UART_Debug_Send()    : 旧 VOFA+ JustFloat 接口 (保留兼容, 不再使用)
  */
+
 void UART_Debug_Send(float *data, uint8_t count);
+
+/* ── JY61P IMU 串口接口 ── */
+void UART_Debug_PollRx(void);
+uint8_t UART_Debug_GetByte(uint8_t *byte_out);
+void UART_Debug_SendBytes(const uint8_t *data, uint8_t len);
 
 #endif

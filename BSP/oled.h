@@ -25,9 +25,7 @@ extern uint8_t g_oled_present;
 /** 初始化 OLED (SSD1306 标准序列) */
 void OLED_Init(void);
 
-/** 关显示 (发 0xAE, 屏幕黑屏但 GDDRAM 保留)
- *  用于切换到 IMU 模式前让 OLED 黑屏, 避免 GDDRAM 残留画面一直亮着
- *  注意: 必须在 g_use_imu 改为 1 之前调用 (内部 oled_cmd 检查 g_use_imu) */
+/** 关显示 (发 0xAE, 屏幕黑屏但 GDDRAM 保留) */
 void OLED_PowerOff(void);
 
 /** 清屏 */

@@ -2,7 +2,7 @@
  * @file    cmd.c
  * @brief   UART 命令解析 — 从 ESP32 接收并修改全局参数
  * 
- * 命令格式 (通过 WiFi→ESP32→UART_BLUETOOTH):
+/* 命令格式 (通过 WiFi→ESP32→UART_BLUETOOTH):
  *   b200    基础速度 = 200 (驱动板单位)
  *   p18     TURN_GAIN_P = 18
  *   d1.5    TURN_GAIN_D = 1.5
@@ -13,11 +13,12 @@
  *   j0.1    驱动板 PID kd = 0.1
  *   s       急停
  *   g       恢复 (同时复位直角弯超时锁定)
- *   m0/m1   巡线/空转
+ *   m0/m1/m3 巡线/空转/不倒翁(IMU yaw自稳, 切到m3时锁当前朝向, 手转车会自动回正)
  *   t200    空转目标速度
- *   E0/E1   切换 IMU↔OLED (共用I2C总线互斥): E1=IMU, E0=OLED
+ *   E0/E1   IMU 解析开关 (改串口后不再与OLED互斥): E1=启用IMU解析, E0=暂停IMU解析
  *   L3      设置目标圈数 = 3 (替代原 LAP_DN 按钮, 范围1~9)
  *   e0/e1   切换 IMU 辅助转弯
+ *   U       切换 UART_DEBUG 原始字节回显 (诊断 JY61P 串口, 开关型)
  *   ?       回传当前参数
  *   B       回显启动状态 (各模块 + 引脚 + 模式)
  */
@@ -43,9 +44,10 @@
 static char  cmd_buf[CMD_BUF_SIZE];
 static uint8_t cmd_idx = 0;
 
-uint8_t g_mode      = 0;     /* 0=巡线, 1=空转 */
+uint8_t g_mode      = 0;     /* 0=巡线, 1=空转, 3=不倒翁(IMU yaw自稳) */
 float   g_target_rpm = 200;  /* 空转目标速度 (驱动板单位) */
 uint8_t g_running    = 0;    /* 上电默认停止, 发 'g' 启动, 's' 停止 */
+uint8_t g_uart_debug_echo = 0;  /* 1=把 UART_DEBUG 收到的原始字节回显到 PC */
 
 /* 驱动板 PID 缓存 (cmd修改后发给驱动板) */
 static float drv_kp = 0.8f;
@@ -207,44 +209,36 @@ static void CMD_Exec(void)
             }
         }
         break;
-    case 'J':   /* IMU 综合探测: 尝试 0x50/0x68/0x69 三个地址 */
-        CMD_SendText("[MSPM0] === IMU Probe ===\n");
+    case 'J':   /* IMU 串口诊断: 显示 UART_DEBUG (PA10/PA11) 是否收到 JY61P 数据
+                 * IMU 已改串口, 原 I2C 探测无意义, 此命令读当前缓存角度并报告状态 */
+        CMD_SendText("[MSPM0] === IMU UART Debug (PA10/PA11, 9600bps) ===\n");
         {
-            const uint8_t addrs[3] = {0x50, 0x68, 0x69};
-            uint8_t found_addr = 0xFF;
-            for (uint8_t k = 0; k < 3; k++) {
-                uint8_t buf[6] = {0};
-                /* 尝试读 0x3D 寄存器 6 字节 (Roll/Pitch/Yaw) */
-                int ret = i2cRead(addrs[k], 0x3D, 6, buf);
-                snprintf(ack, sizeof(ack),
-                    "       try 0x%02X: i2cRead ret=%d, data=%02X %02X %02X %02X %02X %02X\n",
-                    addrs[k], ret, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
-                CMD_SendText(ack);
-                if (ret == 0) {
-                    found_addr = addrs[k];
-                    /* 解析角度 */
-                    int16_t raw_r = (int16_t)(((uint16_t)buf[0]<<8)|buf[1]);
-                    int16_t raw_p = (int16_t)(((uint16_t)buf[2]<<8)|buf[3]);
-                    int16_t raw_y = (int16_t)(((uint16_t)buf[4]<<8)|buf[5]);
-                    snprintf(ack, sizeof(ack),
-                        "       -> R=%.2f P=%.2f Y=%.2f (deg)\n",
-                        raw_r/32768.0f*180.0f, raw_p/32768.0f*180.0f, raw_y/32768.0f*180.0f);
-                    CMD_SendText(ack);
-                }
-            }
-            if (found_addr != 0xFF) {
-                snprintf(ack, sizeof(ack), "[MSPM0] IMU found at 0x%02X\n", found_addr);
-                CMD_SendText(ack);
-            } else {
-                CMD_SendText("[MSPM0] IMU NOT FOUND at 0x50/0x68/0x69\n");
-                CMD_SendText("       (可能IMU是UART模式, 或SDA被拉低导致ACK误判)\n");
+            float r, p, y;
+            uint8_t ret = IMU_Read_RPY(&r, &p, &y);
+            snprintf(ack, sizeof(ack),
+                "[MSPM0] g_imu_present=%d  g_use_imu=%d  IMU_Read_RPY=%d\n"
+                "       cached: Roll=%.2f Pitch=%.2f Yaw=%.2f (deg)\n",
+                g_imu_present, g_use_imu, ret, r, p, y);
+            CMD_SendText(ack);
+            if (!g_imu_present) {
+                CMD_SendText("[MSPM0] IMU no frame received yet.\n"
+                             "       check wiring: JY61P TX→PA11, RX→PA10, VCC→3.3V, GND→GND\n"
+                             "       check JY61P baudrate (default 9600), check UART_DEBUG baudrate=9600\n");
             }
         }
         break;
     case 'm':
-        g_mode = (v > 0.5f) ? 1 : 0;
-        snprintf(ack, sizeof(ack), "[MSPM0] mode=%d (%s)\n",
-                 g_mode, g_mode ? "IDLE" : "TRACK");
+        if (v > 2.5f) {
+            g_mode = 3;   /* m3=不倒翁模式 */
+            /* 锁当前 yaw 为目标, 之后车会自动回正到这个朝向 */
+            g_yaw_target = IMU_Get_Yaw_Cached();
+        } else {
+            g_mode = (v > 0.5f) ? 1 : 0;
+        }
+        snprintf(ack, sizeof(ack), "[MSPM0] mode=%d (%s) yaw_target=%.1f\n",
+                 g_mode,
+                 g_mode == 0 ? "TRACK" : g_mode == 1 ? "IDLE" : "GYRO_LOCK",
+                 g_yaw_target);
         CMD_SendText(ack);
         break;
     case 't':
@@ -315,7 +309,7 @@ static void CMD_Exec(void)
         snprintf(ack, sizeof(ack), "[MSPM0] imu_assist=%d\n", g_imu_assist);
         CMD_SendText(ack);
         break;
-    case 'E':   /* 远程切换 IMU↔OLED (共用 I2C 总线互斥): E1=IMU, E0=OLED
+    case 'E':   /* IMU 解析开关 (改串口后不再与OLED互斥): E1=启用IMU解析, E0=暂停
                  * 和 BTN_MODE 按钮走同一个 switch_mode(), 切完会发通知 */
         switch_mode((v > 0.5f) ? 1 : 0);
         break;
@@ -326,23 +320,29 @@ static void CMD_Exec(void)
         snprintf(ack, sizeof(ack), "[MSPM0] target_laps=%d\n", g_target_laps);
         CMD_SendText(ack);
         break;
+    case 'U':   /* 切换 UART_DEBUG 原始字节回显 (诊断 JY61P 串口通不通) */
+        g_uart_debug_echo = !g_uart_debug_echo;
+        snprintf(ack, sizeof(ack), "[MSPM0] UART_DEBUG raw echo %s\n",
+                 g_uart_debug_echo ? "ON (spamming hex)" : "OFF");
+        CMD_SendText(ack);
+        break;
     case 'B':   /* 回显启动状态 (Boot log): 各模块初始化结果 */
         snprintf(ack, sizeof(ack),
             "[MSPM0] === Boot Status ===\n"
             "       track: OK\n"
             "       cmd:   OK\n"
             "       motor: OK ( drv_pid=%.2f/%.3f/%.2f )\n"
-            "       imu:   %s (g_imu_present=%d)\n"
+            "       imu:   %s (g_imu_present=%d, via UART_DEBUG 9600bps)\n"
             "       odom:  OK\n"
-            "       oled:  %s (g_oled_present=%d)\n"
+            "       oled:  %s (g_oled_present=%d, via I2C PA17/PA15)\n"
             "       button:OK\n"
-            "       mode:  %s (g_use_imu=%d, 1=IMU/0=OLED)\n"
-            "       pins:  MOTOR I2C=PB11/PB12, OLED/IMU I2C=PA17/PA15, GREY_OUT=PA1\n"
+            "       imu_parse: %s (g_use_imu=%d, 1=on/0=paused, OLED unaffected)\n"
+            "       pins:  MOTOR_I2C=PB11/PB12, OLED_I2C=PA17/PA15, IMU_UART=PA10/PA11, GREY_OUT=PA1\n"
             "       btns:  START=PA7, LAP_UP=PA18, MODE=PB1, RESET=PB14\n",
             drv_kp, drv_ki, drv_kd,
             g_imu_present ? "OK" : "FAIL/SKIPPED", g_imu_present,
             g_oled_present ? "OK" : "FAIL/SKIPPED", g_oled_present,
-            g_use_imu ? "IMU" : "OLED", g_use_imu);
+            g_use_imu ? "ON" : "PAUSED", g_use_imu);
         CMD_SendText(ack);
         break;
     case 'M':   /* 读电机编码器 + 直接发 PWM 测试驱动板输出 */
@@ -370,8 +370,8 @@ static void CMD_Exec(void)
             CMD_SendText(ack);
         }
         break;
-    case 'I':   /* I2C 总线扫描 (OLED/IMU 总线, PA17/PA15) */
-        CMD_SendText("[MSPM0] I2C scan (PA17/PA15 OLED+IMU bus)...\n");
+    case 'I':   /* I2C 总线扫描 (仅 OLED, PA17/PA15; IMU 已改串口不在 I2C 上) */
+        CMD_SendText("[MSPM0] I2C scan (PA17/PA15 OLED bus)...\n");
         {
             uint8_t found = 0;
             for (uint8_t addr = 1; addr < 0x80; addr++) {

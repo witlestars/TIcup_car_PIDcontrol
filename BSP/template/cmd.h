@@ -19,9 +19,10 @@
 #include <stdint.h>
 
 /* 全局模式/目标 */
-extern uint8_t g_mode;       /* 0=巡线, 1=空转 */
+extern uint8_t g_mode;       /* 0=巡线, 1=空转, 3=不倒翁(IMU yaw自稳) */
 extern float   g_target_rpm; /* 空转目标 RPM */
 extern uint8_t g_running;    /* 1=运行, 0=停止 (上电默认0, 发'g'启动, 's'停止) */
+extern uint8_t g_uart_debug_echo; /* 1=UART_DEBUG 原始字节回显到 PC */
 
 void CMD_Init(void);
 void CMD_Poll(void);
