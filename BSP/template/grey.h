@@ -35,7 +35,4 @@ typedef struct {
 /** 遍历8路, 更新state->value/centroid/valid */
 void Grey_Read(Grey_State_t *state);
 
-/** VOFA+调试: 发送8路原始值 (JustFloat, UART_DEBUG) */
-void Grey_Debug_Send(Grey_State_t *state);
-
 #endif

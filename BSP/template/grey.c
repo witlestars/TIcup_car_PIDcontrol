@@ -10,7 +10,6 @@
 
 #include "grey.h"
 #include "ti_msp_dl_config.h"
-#include "uart_debug.h"
 #include "delay.h"
 
 /** AD0|AD1|AD2 三根引脚掩码, 切换通道前先全清 */
@@ -91,23 +90,4 @@ void Grey_Read(Grey_State_t *state)
         state->centroid = weighted_sum / (float)active_count;
         state->valid = 1;
     }
-}
-
-/**
- * @brief VOFA+ 调试: 发送8路原始值 (JustFloat协议)
- * @note 已禁用: UART_DEBUG 现在用于接 JY61P IMU (9600bps), 不能再发 VOFA+ 数据
- *       否则 JustFloat 帧会污染 IMU 串口总线, 干扰 JY61P
- *       如需 VOFA+ 调试, 请改用其他 UART 通道
- */
-void Grey_Debug_Send(Grey_State_t *state)
-{
-    (void)state;   /* 避免未使用参数警告 */
-#if 0   /* 禁用: UART_DEBUG 已改给 IMU 串口用 */
-    float buf[8];
-    uint8_t i;
-    for (i = 0; i < 8; i++) {
-        buf[i] = (float)state->value[i];
-    }
-    UART_Debug_Send(buf, 8);
-#endif
 }

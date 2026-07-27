@@ -57,7 +57,7 @@ float Odom_Update(void)
 
     /* 2. 转换为位移 (mm)
      * 注意: 编码器读数有正负, 正向前进为正
-     *       电机线序: M4=左轮, M2=右轮, 用负号修正转向 (见empty.c)
+     *       电机线序: M4=左轮, M2=右轮, 用负号修正转向 (见main.c)
      *       所以编码器返回值的符号需要根据实际情况判断
      *       这里假设前进时 enc_l > 0, enc_r > 0 (如不对, 加负号) */
     float d_l = (float)enc_l * MM_PER_PULSE;

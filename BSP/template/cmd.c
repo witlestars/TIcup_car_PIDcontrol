@@ -27,7 +27,7 @@
 #include "ti_msp_dl_config.h"
 #include "track.h"
 #include "motor.h"
-#include "uart_debug.h"
+#include "imu_uart.h"
 #include "uart_bluetooth.h"
 #include "imu.h"
 #include "odometry.h"
@@ -47,7 +47,7 @@ static uint8_t cmd_idx = 0;
 uint8_t g_mode      = 0;     /* 0=巡线, 1=空转, 3=不倒翁(IMU yaw自稳) */
 float   g_target_rpm = 200;  /* 空转目标速度 (驱动板单位) */
 uint8_t g_running    = 0;    /* 上电默认停止, 发 'g' 启动, 's' 停止 */
-uint8_t g_uart_debug_echo = 0;  /* 1=把 UART_DEBUG 收到的原始字节回显到 PC */
+uint8_t g_imu_uart_echo = 0;  /* 1=把 IMU 串口收到的原始字节回显到 PC */
 
 /* 驱动板 PID 缓存 (cmd修改后发给驱动板) */
 static float drv_kp = 0.8f;
@@ -328,10 +328,10 @@ static void CMD_Exec(void)
         snprintf(ack, sizeof(ack), "[MSPM0] target_laps=%d\n", g_target_laps);
         CMD_SendText(ack);
         break;
-    case 'U':   /* 切换 UART_DEBUG 原始字节回显 (诊断 JY61P 串口通不通) */
-        g_uart_debug_echo = !g_uart_debug_echo;
-        snprintf(ack, sizeof(ack), "[MSPM0] UART_DEBUG raw echo %s\n",
-                 g_uart_debug_echo ? "ON (spamming hex)" : "OFF");
+    case 'U':   /* 切换 IMU 串口原始字节回显 (诊断 JY61P 串口通不通) */
+        g_imu_uart_echo = !g_imu_uart_echo;
+        snprintf(ack, sizeof(ack), "[MSPM0] IMU UART raw echo %s\n",
+                 g_imu_uart_echo ? "ON (spamming hex)" : "OFF");
         CMD_SendText(ack);
         break;
     case 'B':   /* 回显启动状态 (Boot log): 各模块初始化结果 */

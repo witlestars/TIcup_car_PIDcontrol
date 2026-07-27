@@ -1,21 +1,22 @@
 /**
- * @file    empty.c
+ * @file    main.c
  * @brief   巡线小车主程序 — 四路驱动板方案
- * 
+ *
  * 架构:
  *   MSPM0 只负责:
  *     1. 灰度巡线 → Track_Loop() 计算左右速度
  *     2. 发送 $spd 指令给四路驱动板 (自带PID)
  *     3. 接收 ESP32 转发的调参命令
- * 
+ *
  * 初始化流程:
  *   1. SysConfig + SysTick 1ms 时基
  *   2. 配置驱动板参数 (电机类型/减速比/磁环线/轮径)
  *   3. 进入主循环: 非阻塞调度 (巡线/电机 10ms + IMU 50ms)
- * 
+ *
  * 命令 (通过 WiFi→ESP32→UART):
  *   m0      巡线模式
  *   m1      空转模式
+ *   m3      正方形行进 (纯 IMU + 编码器, 非灰度)
  *   b200    基础速度
  *   p18/d1.5  转向PD
  *   k/i/j   驱动板PID
@@ -27,7 +28,7 @@
 #include "BSP/template/motor.h"
 #include "BSP/template/cmd.h"
 #include "BSP/template/uart_bluetooth.h"
-#include "BSP/template/uart_debug.h"
+#include "BSP/template/imu_uart.h"
 #include "BSP/imu.h"
 #include "BSP/odometry.h"
 #include "BSP/oled.h"
@@ -87,7 +88,7 @@ int main(void)
     delay_ms(500);
     /* 启用 UART_DEBUG RX 中断: JY61P 字节到来自动进 ISR 搬到环形缓冲
      * 不再依赖主循环轮询 PollRx, 不会因主循环阻塞丢字节 */
-    UART_Debug_EnableRxIRQ();
+    IMU_UART_EnableRxIRQ();
     CMD_SendText("[MSPM0] init: imu (UART_DEBUG 9600bps, RX IRQ enabled)\n");
     if (IMU_Init() == 0) {
         CMD_SendText("[MSPM0] IMU JY61P OK\n");
@@ -122,7 +123,7 @@ int main(void)
         /* ── 高频任务: 每轮执行, 不漏调参命令 ──
          * (JY61P 字节接收已由 UART0_IRQHandler 自动处理, 这里不需要 PollRx) */
         CMD_Poll();            /* 串口调参命令 */
-        UART_Debug_EchoTick(); /* echo 诊断输出 (echo 开启时才工作, 非阻塞) */
+        IMU_UART_EchoTick();   /* echo 诊断输出 (echo 开启时才工作, 非阻塞) */
 
         /* ── 10ms 节拍: 按钮消抖 + 巡线PID + 电机指令 ── */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10) {

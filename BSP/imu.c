@@ -5,15 +5,15 @@
  * 数据流:
  *   JY61P ──9600bps──> MSPM0 PA11 (UART_DEBUG RX)
  *                      ↓
- *   UART_Debug_PollRx (主循环调用) → 环形缓冲区
+ *   UART0_IRQHandler (RX 中断) → 环形缓冲区
  *                      ↓
- *   IMU_Poll (10ms一次) → 取字节 → 状态机解析 0x55 0x53 帧缓存 yaw
+ *   IMU_Poll (50ms一次) → 取字节 → 状态机解析 0x55 0x53 帧缓存 yaw
  *
  *   IMU_Read_Yaw / IMU_Get_Yaw_Cached → 直接返回缓存值 (不阻塞主循环)
  */
 
 #include "imu.h"
-#include "uart_debug.h"
+#include "imu_uart.h"
 #include "delay.h"
 #include "ti_msp_dl_config.h"
 
@@ -125,9 +125,9 @@ uint8_t IMU_Init(void)
      * MSPM0 UART FIFO 仅 4 字节, 9600bps 每 10ms 到 ~10 字节, 必须 ≤5ms 轮询 */
     for (uint16_t i = 0; i < 200; i++) {
         delay_ms(5);
-        UART_Debug_PollRx();
+        IMU_UART_PollRx();
         uint8_t b;
-        while (UART_Debug_GetByte(&b)) {
+        while (IMU_UART_GetByte(&b)) {
             imu_parse_byte(b);
         }
         if (g_imu_present) {
@@ -173,17 +173,17 @@ uint8_t IMU_Calibrate_Z(void)
 {
     /* 解锁寄存器 */
     static const uint8_t unlock[] = {0xFF, 0xAA, 0x69, 0x88, 0xB5};
-    UART_Debug_SendBytes(unlock, 5);
+    IMU_UART_SendBytes(unlock, 5);
     delay_ms(200);
 
     /* Z 轴归零 */
     static const uint8_t calib[] = {0xFF, 0xAA, 0x76, 0x00, 0x00};
-    UART_Debug_SendBytes(calib, 5);
+    IMU_UART_SendBytes(calib, 5);
     delay_ms(200);
 
     /* 保存到 Flash */
     static const uint8_t save[] = {0xFF, 0xAA, 0x00, 0x00, 0x00};
-    UART_Debug_SendBytes(save, 5);
+    IMU_UART_SendBytes(save, 5);
     delay_ms(200);
 
     /* 归零后清缓存 (JY61P 会在下一帧输出归零后的角度) */
@@ -193,8 +193,8 @@ uint8_t IMU_Calibrate_Z(void)
 
 /**
  * @brief 主循环轮询: 把 UART_DEBUG 的字节喂给解析器
- *        @note 不在内部调 UART_Debug_PollRx, 由上层主循环统一调
- *              (因为 UART_Debug_PollRx 还要清 overrun, 集中调避免遗漏)
+ *        @note 不在内部调 IMU_UART_PollRx, 由上层主循环统一调
+ *              (因为 IMU_UART_PollRx 还要清 overrun, 集中调避免遗漏)
  */
 void IMU_Poll(void)
 {
@@ -202,7 +202,7 @@ void IMU_Poll(void)
     uint8_t b;
     /* 每次最多解析 32 字节, 防止突发数据卡住主循环 */
     uint8_t budget = 32;
-    while (budget-- && UART_Debug_GetByte(&b)) {
+    while (budget-- && IMU_UART_GetByte(&b)) {
         imu_parse_byte(b);
     }
 }

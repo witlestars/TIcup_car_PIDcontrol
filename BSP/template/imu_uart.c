@@ -1,8 +1,8 @@
-#include "uart_debug.h"
+#include "imu_uart.h"
 #include "ti_msp_dl_config.h"
 
-/* 回显开关注入 (由 cmd.c 的 'U' 命令切换, 来自 empty.c 主循环) */
-extern uint8_t g_uart_debug_echo;
+/* 回显开关注入 (由 cmd.c 的 'U' 命令切换, 来自 main.c 主循环) */
+extern uint8_t g_imu_uart_echo;
 
 /* ──────────────────────────────────────────────────────────
  * UART_DEBUG (UART0, PA10=TX, PA11=RX, 9600bps) 串口实现
@@ -23,32 +23,13 @@ static volatile uint8_t  s_rx_buf[DBG_BUF_SIZE];
 static volatile uint8_t  s_rx_head;   /* 写入位置 (ISR 推进) */
 static volatile uint8_t  s_rx_tail;   /* 读取位置 (GetByte 推进) */
 
-/* 旧 VOFA+ JustFloat 接口 (保留兼容, 当前不再使用, grey.c 已禁用) */
-void UART_Debug_Send(float *data, uint8_t count)
-{
-    uint8_t i;
-    uint8_t *p;
-    for (i = 0; i < count; i++) {
-        p = (uint8_t *)(&data[i]);
-        DL_UART_Main_transmitDataBlocking(UART_DEBUG_INST, p[0]);
-        DL_UART_Main_transmitDataBlocking(UART_DEBUG_INST, p[1]);
-        DL_UART_Main_transmitDataBlocking(UART_DEBUG_INST, p[2]);
-        DL_UART_Main_transmitDataBlocking(UART_DEBUG_INST, p[3]);
-    }
-    /* JustFloat 帧尾 */
-    DL_UART_Main_transmitDataBlocking(UART_DEBUG_INST, 0x00);
-    DL_UART_Main_transmitDataBlocking(UART_DEBUG_INST, 0x00);
-    DL_UART_Main_transmitDataBlocking(UART_DEBUG_INST, 0x80);
-    DL_UART_Main_transmitDataBlocking(UART_DEBUG_INST, 0x7f);
-}
-
 /**
  * @brief 启用 UART_DEBUG RX 中断
  *        在 syscfg 没配 UART RX 中断的情况下, 这里手动启用
  *        (driverlib 允许运行时配置, 不依赖 SysConfig 重新生成)
  *        必须在 UART0 外设初始化 (SYSCFG_DL_init) 之后调用
  */
-void UART_Debug_EnableRxIRQ(void)
+void IMU_UART_EnableRxIRQ(void)
 {
     /* 清 NVIC pending, 防止残留触发 */
     NVIC_ClearPendingIRQ(UART_DEBUG_INST_INT_IRQN);
@@ -73,7 +54,7 @@ void UART_Debug_EnableRxIRQ(void)
  * @note ISR 内严禁做 echo! 之前在 ISR 里发 hex 到蓝牙串口会导致:
  *        - ISR 抢蓝牙 TX FIFO, 主循环 CMD_SendText 永远发不出 → 系统卡死
  *        - ISR 打断主循环正在发的字节, TX 数据被污染 → 串口输出乱码
- *       echo 改到主循环的 UART_Debug_EchoTick() 里做 (非阻塞, TX 满就跳过)
+ *       echo 改到主循环的 IMU_UART_EchoTick() 里做 (非阻塞, TX 满就跳过)
  *
  * @note 之前用 DL_UART_clearInterruptStatus 没真正清 RX pending,
  *        导致 ISR 反复进但 FIFO 空, while 不执行, 新字节不处理, yaw 卡在 0
@@ -115,17 +96,17 @@ void UART0_IRQHandler(void)
  * @brief 主循环调用: echo 诊断输出 (非阻塞, 移到主循环做, 不在 ISR 做)
  *        从环形缓冲取字节, 以 hex 发到蓝牙串口 (TX FIFO 满就跳过该字节)
  *        每次最多发 8 字节 (24 hex 字符), 防止霸占蓝牙 TX
- * @note  echo 开启时 (g_uart_debug_echo=1) 才工作, 关闭时立即返回
+ * @note  echo 开启时 (g_imu_uart_echo=1) 才工作, 关闭时立即返回
  */
-void UART_Debug_EchoTick(void)
+void IMU_UART_EchoTick(void)
 {
-    if (!g_uart_debug_echo) return;
+    if (!g_imu_uart_echo) return;
 
     const char h[] = "0123456789ABCDEF";
     uint8_t budget = 8;   /* 每次最多处理 8 字节, 避免霸占蓝牙 TX */
     while (budget--) {
         uint8_t b;
-        if (!UART_Debug_GetByte(&b)) break;   /* 缓冲区空 */
+        if (!IMU_UART_GetByte(&b)) break;   /* 缓冲区空 */
 
         /* hex 发到蓝牙串口, 非阻塞 (TX FIFO 满就跳过该字符) */
         char hex[3];
@@ -149,7 +130,7 @@ void UART_Debug_EchoTick(void)
  *        改用中断后此函数不再需要, 保留仅为兼容旧调用点
  *        (函数体留空, 不做任何事, 中断已自动处理所有字节接收)
  */
-void UART_Debug_PollRx(void)
+void IMU_UART_PollRx(void)
 {
     /* 中断版: 不需要主循环轮询, 留空兼容 */
 }
@@ -158,7 +139,7 @@ void UART_Debug_PollRx(void)
  * @brief 从环形缓冲区取 1 字节
  * @return 1=取到, 0=缓冲区空
  */
-uint8_t UART_Debug_GetByte(uint8_t *byte_out)
+uint8_t IMU_UART_GetByte(uint8_t *byte_out)
 {
     if (s_rx_head == s_rx_tail) return 0;   /* 空 */
     *byte_out = s_rx_buf[s_rx_tail];
@@ -170,7 +151,7 @@ uint8_t UART_Debug_GetByte(uint8_t *byte_out)
  * @brief 发 N 字节给 JY61P (用于归零/解锁/保存命令)
  *        命令帧格式: 0xFF 0xAA REG VAL_LO VAL_HI
  */
-void UART_Debug_SendBytes(const uint8_t *data, uint8_t len)
+void IMU_UART_SendBytes(const uint8_t *data, uint8_t len)
 {
     uint8_t i;
     for (i = 0; i < len; i++) {
