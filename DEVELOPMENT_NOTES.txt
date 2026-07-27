@@ -1,0 +1,134 @@
+TIcup 巡线小车 开发笔记与教训总结
+====================================
+硬件: MSPM0G3507 + JY61P IMU + 8路灰度 + 编码器驱动板
+仓库: github.com/witlestars/TIcup_car_PIDcontrol (个人)
+      github.com/kk-diansai-2026/TIcup_car_PIDcontrol (组织)
+
+============================================================
+1. IMU (JY61P) 串口解析 教训历程
+============================================================
+
+问题1: yaw 值恒为 0
+  原因: 数据区 0x55 字节被误判为帧头, 导致 0x53 角度帧索引错位
+  修复: 启用严格校验和 SUM=(0x55+type+Σdata[0..7])&0xFF, 校验失败丢弃整帧
+  教训: JY61P 0x51 加速度帧数据区常含 0x55, 必须严格校验, 不能只看帧头
+
+问题2: 系统卡死 (开启 echo 时)
+  原因: ISR 内同步阻塞发送 echo 到蓝牙串口, 抢占 TX FIFO,
+        主循环 CMD_SendText 永远发不出, 系统卡死
+  修复: ISR 内移除 echo, echo 逻辑移到主循环 IMU_EchoTick() 非阻塞处理
+  教训: ISR 内严禁做耗时操作 (TX 阻塞/delay_ms/复杂业务), 只做最小工作
+
+问题3: 中断接收不持续
+  原因: 用 DL_UART_clearInterruptStatus 没真正清 RX pending,
+        导致 ISR 反复进入但 FIFO 空, 新字节不处理, yaw 卡在 0
+  修复: 改用 DL_UART_Main_getPendingInterrupt (自动清 pending 标志)
+  教训: MSPM0 driverlib 用 getPendingInterrupt 比 clearInterruptStatus 可靠
+
+问题4: IMU 解析延迟导致车乱跑
+  原因: IMU 解析放 50ms 节拍, yaw 缓存延迟过大, 电机控制用旧 yaw 修正
+  修复: IMU_Poll 改为每轮执行 (主循环高频), 降低 yaw 延迟
+  教训: IMU 解析周期必须小于电机控制周期 (10ms), 否则修正用旧数据导致车乱跑
+
+问题5: ISR 内做 echo / 业务导致卡死或丢字节
+  原因: CMD_SendText 阻塞 TX FIFO, IMU_Calibrate_Z 有 600ms delay_ms
+  修复: ISR 只搬字节到环形缓冲, echo/解析/业务全放主循环
+  教训: ISR 只做最小工作 (搬数据/设标志), 业务逻辑放主循环
+
+============================================================
+2. 代码结构演进
+============================================================
+
+阶段1: 轮询接收
+  - UART_DEBUG RX 用主循环轮询读 FIFO
+  - 问题: 主循环阻塞时丢字节
+
+阶段2: 中断接收 + 分层
+  - imu_uart.c: ISR + 环形缓冲 + GetByte + SendBytes + EchoTick
+  - imu.c: 帧解析状态机
+  - 问题: 两文件功能重合, 维护困难
+
+阶段3: 合并 (当前)
+  - imu.c 合并 imu_uart.c 全部功能, 删除 imu_uart.c/h
+  - 函数名 IMU_UART_* → IMU_*
+  - 统一管理 IMU 串口收发 + 帧解析
+
+============================================================
+3. 按钮架构演进
+============================================================
+
+阶段1: 轮询
+  - Button_Poll() 10ms 节拍调用, 软件消抖 30ms, FIFO 事件队列
+  - 问题: 占主循环时间, 响应慢
+
+阶段2: 中断 + 事件队列
+  - syscfg 配置 GPIO 下降沿中断 + 8 cycles 硬件消抖
+  - ISR push 事件到 FIFO, 主循环 Button_Get_Event 取出
+  - 问题: 队列过度设计 (4按钮用队列), 业务逻辑塞 main.c 40 行
+
+阶段3: 中断 + 标志位 (当前)
+  - ISR 只设 g_btn_flag 标志位 (4 bit, 极轻量)
+  - 业务逻辑封装在 Button_HandleEvents(), main.c 只调一次
+  - 删除事件队列, 删除 btn_event_t 枚举
+  - 教训: 简单场景不要过度设计, 标志位足够时不用队列
+
+队友 develop-CIJUN 分支按钮中断 bug:
+  - 用 GROUP1_IRQHandler, 但 PA7/PA18 是 GPIOA, MSPM0 默认走 GROUP0
+  - 修复: 用 GROUP0_IRQHandler, 同时检查 GPIOA + GPIOB pending
+
+============================================================
+4. m3 正方形行进 修复历程
+============================================================
+
+bug1: 转弯无刹车惯性
+  - 到位立即切直行, 车有转弯惯性, 下一条边开局就偏
+  - 修复: 新增 state=3 刹车, 到位后停车 200ms 消惯性再切直行
+
+bug2: 转弯用绝对角度需归一化, 易出错
+  - 修复: 记录转弯起点 yaw, 用相对幅度判定 (delta=now-start, 目标 delta=90°)
+  - 教训: 转弯判定用相对幅度比绝对目标角更可靠, 不用处理 ±180 归一化
+
+bug3: IMU 离线时 m3 仍跑, yaw 恒 0 导致修正乱打方向原地转圈
+  - 修复: !g_imu_present 时直接停车
+
+bug4: JY61P 倒扣安装, 方向判定容易搞反
+  - 倒扣: 从车顶看左转 = 从模块顶面看顺时针 = 维特标准 yaw+
+  - 教训: 安装方向影响 yaw 增减, 必须实测确认 (发 y 命令手转车观察)
+
+============================================================
+5. 硬件配置 (empty.syscfg) 关键点
+============================================================
+
+UART_DEBUG (UART0): 9600bps, PA10=TX, PA11=RX, 接 JY61P IMU
+UART_BLUETOOTH (UART1): 115200bps, PA8=TX, PA9=RX, 接 ESP32
+GPIO_BUTTON: PA7/PA18/PB1/PB14, 下降沿中断 + 8 cycles 硬件消抖
+MOTOR_I2C (PB11/PB12): 软件I2C, 接驱动板
+OLED_I2C (PA17/PA15): 软件I2C, 接 OLED
+
+注意: syscfg 改了按钮/UART 中断配置后, 必须在 CCS 重新保存生成代码,
+      否则 ti_msp_dl_config.h 里没有 IIDX 宏, 编译报错
+
+============================================================
+6. GitHub 推送约定
+============================================================
+
+代码改动需同时推送到:
+  - origin (个人): github.com/witlestars/TIcup_car_PIDcontrol
+  - organization (组织): github.com/kk-diansai-2026/TIcup_car_PIDcontrol
+
+推送前必须本地编译通过 (CCS Theia IDE), 不推未验证的代码
+
+============================================================
+7. 关键全局变量速查
+============================================================
+
+g_sys_tick     : SysTick 1ms 时基 (main.c)
+g_running      : 1=运行 0=停止 (上电默认0, 'g'启动 's'停止)
+g_mode         : 0=巡线 1=空转 3=正方形行进
+g_imu_present  : 1=IMU收到过有效帧
+g_use_imu      : 1=IMU解析启用 0=暂停
+g_imu_yaw      : 缓存 yaw (度, -180~180)
+g_imu_roll/pitch/gyrox.../accz : 0x53/0x52/0x51 帧缓存
+g_square_state : m3状态机 0=直行 1=转弯 2=完成 3=刹车
+g_one_shot_turn: T命令单次转弯标志
+g_btn_flag     : 按钮标志位 (ISR设, Button_HandleEvents清)
