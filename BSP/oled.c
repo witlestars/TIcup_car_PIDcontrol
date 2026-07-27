@@ -267,3 +267,34 @@ void OLED_Printf(const char *fmt, ...)
     va_end(args);
     OLED_Print(buf);
 }
+
+/**
+ * @brief 局部清除指定区域 (不清整个屏幕)
+ *        8x16 字符占 2 页 (上下半区), 写 0x00 擦除
+ * @param row 起始行 (0-3)
+ * @param col 起始列 (0-15)
+ * @param len 清除字符数
+ */
+void OLED_ClearArea(uint8_t row, uint8_t col, uint8_t len)
+{
+    if (g_oled_present == 0) return;
+    if (row >= OLED_ROWS) return;
+
+    uint8_t page = row * 2;   /* 8x16 字符占 2 页 */
+    for (uint8_t i = 0; i < len; i++) {
+        uint8_t cur_col = col + i;
+        if (cur_col >= OLED_COLS) break;
+        uint8_t col_lo = (cur_col * 8) & 0x0F;
+        uint8_t col_hi = (cur_col * 8) >> 4;
+
+        oled_cmd(0xB0 + page);
+        oled_cmd(0x00 + col_lo);
+        oled_cmd(0x10 + col_hi);
+        for (uint8_t j = 0; j < 8; j++) oled_data(0x00);
+
+        oled_cmd(0xB0 + page + 1);
+        oled_cmd(0x00 + col_lo);
+        oled_cmd(0x10 + col_hi);
+        for (uint8_t j = 0; j < 8; j++) oled_data(0x00);
+    }
+}

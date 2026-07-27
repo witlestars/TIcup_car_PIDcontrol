@@ -11,7 +11,7 @@
  * 初始化流程:
  *   1. SysConfig + SysTick 1ms 时基
  *   2. 配置驱动板参数 (电机类型/减速比/磁环线/轮径)
- *   3. 进入主循环: 非阻塞调度 (巡线/电机 10ms + IMU 50ms)
+ *   3. 进入主循环: 非阻塞调度 (IMU解析每轮 + 巡线/电机 10ms)
  *
  * 命令 (通过 WiFi→ESP32→UART):
  *   m0      巡线模式
@@ -124,22 +124,30 @@ int main(void)
     CMD_SendText("[MSPM0] init done\n");
 
     /* 非阻塞调度: 高频任务每轮跑, 周期任务用 SysTick 时间戳
-     * UART_DEBUG 已改中断接收, RX 字节自动进 ISR 搬到环形缓冲, 主循环不再需要 PollRx
-     * 按钮消抖依赖 ~10ms 周期, 不能全速轮询, 故 Button_Poll 放 10ms 节拍 */
-    uint32_t last_10ms = 0;   /* 按钮/PID/电机 节拍 */
-    uint32_t last_50ms = 0;   /* IMU 解析节拍 */
+     * UART_DEBUG 已改中断接收, RX 字节自动进 ISR 搬到环形缓冲
+     * 按钮已改 GPIO 下降沿中断 (GROUP0_IRQHandler), 不再需要 Button_Poll
+     * IMU 解析从 50ms 节拍改为每轮执行, 降低 yaw 延迟 (避免车乱跑) */
+    uint32_t last_10ms = 0;   /* 电机/PID 节拍 */
 
     while (1) {
-        /* ── 高频任务: 每轮执行, 不漏调参命令 ──
+        /* ── 高频任务: 每轮执行 ──
          * (JY61P 字节接收已由 UART0_IRQHandler 自动处理, 这里不需要 PollRx) */
         CMD_Poll();            /* 串口调参命令 */
         IMU_UART_EchoTick();   /* echo 诊断输出 (echo 开启时才工作, 非阻塞) */
 
-        /* ── 10ms 节拍: 按钮消抖 + 巡线PID + 电机指令 ── */
+        /* IMU 帧解析: 每轮执行 (原 50ms 节拍, 现改为每轮降低 yaw 延迟)
+         * ISR 已把字节搬到环形缓冲, 这里只取字节解析, 开销很小
+         * 队友的本意: IMU 解析要足够快, 小于电机控制周期, 否则车乱跑 */
+        if (g_use_imu) {
+            IMU_Poll();
+        }
+
+        /* ── 10ms 节拍: 按钮事件 + 巡线PID + 电机指令 ── */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10) {
             last_10ms = g_sys_tick;
 
-            Button_Poll();
+            /* 按钮事件处理 (Button_Poll 已删, 改 GROUP0_IRQHandler 中断驱动)
+             * ISR push 事件到 FIFO, 这里取出执行业务逻辑 */
             btn_event_t evt;
             while ((evt = Button_Get_Event()) != BTN_EVENT_NONE) {
                 switch (evt) {
@@ -331,15 +339,6 @@ int main(void)
 
             /* ── 发送速度指令给驱动板 ── */
             Motor_Send_Speed(0, -g_motor_r_speed, 0, -g_motor_l_speed);
-        }
-
-        /* ── 50ms 节拍: IMU 帧解析 (JY61P 10Hz 输出, 50ms 够用) ──
-         *    字节已由 UART0_IRQHandler (RX 中断) 自动搬进环形缓冲, 这里只做帧解析 */
-        if ((uint32_t)(g_sys_tick - last_50ms) >= 50) {
-            last_50ms = g_sys_tick;
-            if (g_use_imu) {
-                IMU_Poll();
-            }
         }
     }
 }

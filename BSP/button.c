@@ -1,101 +1,104 @@
 /**
  * @file    button.c
- * @brief   4按钮消抖 + 事件队列实现
+ * @brief   4按钮 GPIO 中断驱动 + 事件队列
+ *
+ * 架构 (中断驱动, 替代原轮询方案):
+ *   SysConfig 配置 4 个按钮 GPIO 下降沿中断 + 8 周期硬件消抖
+ *   GROUP0_IRQHandler (MSPM0 默认 GPIO 中断组) 处理 GPIOA + GPIOB
+ *   ISR 内做 20ms 软件消抖 (防硬件消抖残留抖动) + push 事件到 FIFO
+ *   主循环 Button_Get_Event 取事件执行业务逻辑 (ISR 不做业务)
+ *
+ * 硬件接线 (按钮一端接 pin, 另一端接 GND, 内部上拉):
+ *   BTN_START  = PA7  (GPIOA, GROUP0)
+ *   BTN_LAP_UP = PA18 (GPIOA, GROUP0)
+ *   BTN_MODE   = PB1  (GPIOB, GROUP0)
+ *   BTN_RESET  = PB14 (GPIOB, GROUP0)
+ *
+ * 中断分组说明:
+ *   MSPM0G3507 的 GPIO 中断默认走 GROUP0 (syscfg 未设 interruptGroup 时)
+ *   GROUP0_IRQHandler 里同时检查 GPIOA 和 GPIOB 的 pending
+ *   (队友 develop-CIJUN 分支用 GROUP1 且只查一次, PA7/PA18 进不来, 已修)
  */
 
 #include "button.h"
 #include "ti_msp_dl_config.h"
 
-/* 按钮 GPIO 宏 (SysConfig 里命名 GPIO_BUTTON)
- * 4个pin (按用户实际焊接位置):
- *   BTN_START  = PA7  (A07)
- *   BTN_LAP_UP = PA18 (A18)
- *   BTN_MODE   = PB1  (B01) ← 原 AIN_2 已移到 PA13, 原 LAP_DN 改为 MODE
- *   BTN_RESET  = PB14 (B14)
- */
-#define BTN_START_PIN     DL_GPIO_PIN_7
-#define BTN_LAP_UP_PIN    DL_GPIO_PIN_18
-#define BTN_MODE_PIN      DL_GPIO_PIN_1
-#define BTN_RESET_PIN     DL_GPIO_PIN_14
-/* PA7/PA18 在 GPIOA, PB1/PB14 在 GPIOB, 分开读 */
+/* SysTick 1ms 时基 (定义在 main.c, ISR 内用来做软件消抖时间戳) */
+extern volatile uint32_t g_sys_tick;
 
 /* 按钮索引 */
 #define N_BTN  4
 enum { IDX_START = 0, IDX_LAP_UP, IDX_MODE, IDX_RESET };
 
-/* 消抖状态 */
-static struct {
-    uint8_t debounce;     /* 消抖计数器 0~3 */
-    uint8_t stable;       /* 当前稳定电平 0=按下 1=松开 */
-    uint8_t prev_stable;  /* 上一次稳定电平 */
-} btn[N_BTN];
+/* 软件消抖时间戳 (ms), 每个按钮独立 */
+static uint32_t s_last_tick[N_BTN];
+#define DEBOUNCE_MS  20   /* 软件消抖间隔 (硬件已有 8 cycles 消抖, 这层是兜底) */
 
-/* 事件队列 */
-#define EVT_QUEUE_SIZE 4
+/* 事件队列 (ISR 生产, 主循环消费, 单生产单消费环形缓冲无需关中断) */
+#define EVT_QUEUE_SIZE 8
 static btn_event_t evt_queue[EVT_QUEUE_SIZE];
-static uint8_t evt_head = 0, evt_tail = 0;
-
-/* 读取4个按钮的原始电平 (0=按下, 1=松开) */
-static uint8_t read_raw(uint8_t idx)
-{
-    /* PA7/PA18 在 GPIOA, PB1/PB14 在 GPIOB */
-    switch (idx) {
-        case IDX_START:   return (DL_GPIO_readPins(GPIOA, BTN_START_PIN)  > 0) ? 1 : 0;
-        case IDX_LAP_UP:  return (DL_GPIO_readPins(GPIOA, BTN_LAP_UP_PIN) > 0) ? 1 : 0;
-        case IDX_MODE:    return (DL_GPIO_readPins(GPIOB, BTN_MODE_PIN)   > 0) ? 1 : 0;
-        case IDX_RESET:   return (DL_GPIO_readPins(GPIOB, BTN_RESET_PIN)  > 0) ? 1 : 0;
-        default: return 1;
-    }
-}
+static volatile uint8_t evt_head = 0, evt_tail = 0;
 
 void Button_Init(void)
 {
     for (uint8_t i = 0; i < N_BTN; i++) {
-        btn[i].debounce    = 0;
-        btn[i].stable      = 1;   /* 默认松开 */
-        btn[i].prev_stable = 1;
+        s_last_tick[i] = 0;
     }
     evt_head = evt_tail = 0;
+    /* GPIO 中断已由 SYSCFG_DL_init() 启用 (syscfg interruptEn=true),
+     * NVIC 也由 SysConfig 自动启用, 这里不需要手动 NVIC_EnableIRQ */
 }
 
-/* 压入事件 */
-static void push_event(btn_event_t e)
+/* ISR 内调用: 带消抖的事件 push */
+static void btn_isr_handle(uint8_t idx, btn_event_t evt, uint32_t now)
 {
-    uint8_t next = (evt_tail + 1) % EVT_QUEUE_SIZE;
-    if (next != evt_head) {   /* 队列没满 */
-        evt_queue[evt_tail] = e;
+    if ((now - s_last_tick[idx]) < DEBOUNCE_MS) {
+        return;   /* 消抖窗口内, 忽略 */
+    }
+    s_last_tick[idx] = now;
+
+    /* push 事件到 FIFO (队列满则丢弃, 不阻塞 ISR) */
+    uint8_t next = (uint8_t)((evt_tail + 1) % EVT_QUEUE_SIZE);
+    if (next != evt_head) {
+        evt_queue[evt_tail] = evt;
         evt_tail = next;
     }
 }
 
-void Button_Poll(void)
+/**
+ * @brief GPIO GROUP0 中断服务程序
+ *        MSPM0G3507 默认所有 GPIO 中断走 GROUP0 (syscfg 未改 interruptGroup)
+ *        同时检查 GPIOA (PA7/PA18) 和 GPIOB (PB1/PB14) 的 pending
+ * @note  DL_GPIO_getPendingInterrupt 会自动清除 pending 标志
+ */
+void GROUP0_IRQHandler(void)
 {
-    for (uint8_t i = 0; i < N_BTN; i++) {
-        uint8_t raw = read_raw(i);
+    uint32_t now = g_sys_tick;   /* 主循环的 SysTick 1ms 时基 */
 
-        /* 消抖: 与当前稳定值不同则计数, 连续3次(30ms)确认 */
-        if (raw != btn[i].stable) {
-            btn[i].debounce++;
-            if (btn[i].debounce >= 3) {
-                btn[i].prev_stable = btn[i].stable;
-                btn[i].stable = raw;
-                btn[i].debounce = 0;
+    /* 检查 GPIOA: BTN_START(PA7) + BTN_LAP_UP(PA18) */
+    uint32_t irqA = DL_GPIO_getPendingInterrupt(GPIOA);
+    switch (irqA) {
+    case GPIO_BUTTON_BTN_START_IIDX:
+        btn_isr_handle(IDX_START, BTN_EVENT_START, now);
+        break;
+    case GPIO_BUTTON_BTN_LAP_UP_IIDX:
+        btn_isr_handle(IDX_LAP_UP, BTN_EVENT_LAP_UP, now);
+        break;
+    default:
+        break;
+    }
 
-                /* 检测下降沿 (1→0 = 按下) */
-                if (btn[i].prev_stable == 1 && btn[i].stable == 0) {
-                    btn_event_t e = BTN_EVENT_NONE;
-                    switch (i) {
-                        case IDX_START:   e = BTN_EVENT_START;     break;
-                        case IDX_LAP_UP:  e = BTN_EVENT_LAP_UP;    break;
-                        case IDX_MODE:    e = BTN_EVENT_MODE;      break;
-                        case IDX_RESET:   e = BTN_EVENT_RESET;     break;
-                    }
-                    if (e != BTN_EVENT_NONE) push_event(e);
-                }
-            }
-        } else {
-            btn[i].debounce = 0;
-        }
+    /* 检查 GPIOB: BTN_MODE(PB1) + BTN_RESET(PB14) */
+    uint32_t irqB = DL_GPIO_getPendingInterrupt(GPIOB);
+    switch (irqB) {
+    case GPIO_BUTTON_BTN_LAP_DN_IIDX:   /* syscfg 里还叫 LAP_DN, 实际是 MODE */
+        btn_isr_handle(IDX_MODE, BTN_EVENT_MODE, now);
+        break;
+    case GPIO_BUTTON_BTN_RESET_IIDX:
+        btn_isr_handle(IDX_RESET, BTN_EVENT_RESET, now);
+        break;
+    default:
+        break;
     }
 }
 
@@ -103,20 +106,19 @@ btn_event_t Button_Get_Event(void)
 {
     if (evt_head == evt_tail) return BTN_EVENT_NONE;
     btn_event_t e = evt_queue[evt_head];
-    evt_head = (evt_head + 1) % EVT_QUEUE_SIZE;
+    evt_head = (uint8_t)((evt_head + 1) % EVT_QUEUE_SIZE);
     return e;
 }
 
-/* 读取4个按钮当前电平 (调试用)
+/* 读取4个按钮当前电平 (调试用, 给OLED显示)
  * 返回 bit0~bit3: 1=按下(低电平), 0=松开(高电平)
- * bit0=START(PA7), bit1=LAP_UP(PA18), bit2=MODE(PB1), bit3=RESET(PB14)
- */
+ * bit0=START(PA7), bit1=LAP_UP(PA18), bit2=MODE(PB1), bit3=RESET(PB14) */
 uint8_t Button_Get_Raw_Level(void)
 {
     uint8_t r = 0;
-    if (read_raw(IDX_START)   == 0) r |= 0x01;
-    if (read_raw(IDX_LAP_UP)  == 0) r |= 0x02;
-    if (read_raw(IDX_MODE)    == 0) r |= 0x04;
-    if (read_raw(IDX_RESET)   == 0) r |= 0x08;
+    if ((DL_GPIO_readPins(GPIOA, DL_GPIO_PIN_7)  == 0)) r |= 0x01;
+    if ((DL_GPIO_readPins(GPIOA, DL_GPIO_PIN_18) == 0)) r |= 0x02;
+    if ((DL_GPIO_readPins(GPIOB, DL_GPIO_PIN_1)  == 0)) r |= 0x04;
+    if ((DL_GPIO_readPins(GPIOB, DL_GPIO_PIN_14) == 0)) r |= 0x08;
     return r;
 }

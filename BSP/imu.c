@@ -18,17 +18,26 @@
 #include "ti_msp_dl_config.h"
 
 /* ─── 内部状态 ─── */
-static float s_yaw_cached   = 0.0f;   /* 最近一次解析的 yaw (度) */
-static float s_pitch_cached = 0.0f;
-static float s_roll_cached  = 0.0f;
+/* 0x53 角度帧缓存 (度) */
+float g_imu_roll  = 0.0f;
+float g_imu_pitch = 0.0f;
+float g_imu_yaw   = 0.0f;
+/* 0x52 角速度帧缓存 (°/s, 量程 ±2000) */
+float g_imu_gyrox = 0.0f;
+float g_imu_gyroy = 0.0f;
+float g_imu_gyroz = 0.0f;
+/* 0x51 加速度帧缓存 (g, 量程 ±16g) */
+float g_imu_accx  = 0.0f;
+float g_imu_accy  = 0.0f;
+float g_imu_accz  = 0.0f;
 
 uint8_t g_imu_present = 0;            /* 1=收到过有效 JY61P 帧, 0=未接 */
 uint8_t g_use_imu = 1;                /* 1=IMU 解析启用 (默认), 0=暂停解析 */
 
 /* ─── 帧解析状态机 ───
  * 帧: [0x55][TYPE][D0..D7][SUM], 共 11 字节
- * 只关心 TYPE=0x53 角度帧
- */
+ * 解析 TYPE=0x51 加速度 / 0x52 角速度 / 0x53 角度 三种帧
+ * (队友 develop-CIJUN 分支也解析这三种, 本实现借鉴其帧类型扩展) */
 typedef enum {
     PS_FIND_55 = 0,   /* 等待帧头 0x55 */
     PS_TYPE,          /* 收 0x55 后, 读类型字节 */
@@ -76,15 +85,27 @@ static void imu_parse_byte(uint8_t b)
          * 导致帧同步漂移 (0x51 加速度帧数据区常含 0x55,
          * 被误判后 0x53 角度帧的数据索引全错, yaw 解出来恒为 0) */
         if (b == (uint8_t)(s_sum & 0xFF)) {
-            /* 校验通过, 是真帧 */
+            /* 校验通过, 是真帧, 按类型解析 */
+            int16_t raw0 = (int16_t)(((uint16_t)s_data_buf[1] << 8) | s_data_buf[0]);
+            int16_t raw1 = (int16_t)(((uint16_t)s_data_buf[3] << 8) | s_data_buf[2]);
+            int16_t raw2 = (int16_t)(((uint16_t)s_data_buf[5] << 8) | s_data_buf[4]);
+
             if (s_frame_type == 0x53) {
-                int16_t raw_r = (int16_t)(((uint16_t)s_data_buf[1] << 8) | s_data_buf[0]);
-                int16_t raw_p = (int16_t)(((uint16_t)s_data_buf[3] << 8) | s_data_buf[2]);
-                int16_t raw_y = (int16_t)(((uint16_t)s_data_buf[5] << 8) | s_data_buf[4]);
-                s_roll_cached  = (float)raw_r / 32768.0f * 180.0f;
-                s_pitch_cached = (float)raw_p / 32768.0f * 180.0f;
-                s_yaw_cached   = (float)raw_y / 32768.0f * 180.0f;
-                g_imu_present = 1;   /* 至少收到一帧, 标记在线 */
+                /* 角度帧: /32768*180 = 度 */
+                g_imu_roll  = (float)raw0 / 32768.0f * 180.0f;
+                g_imu_pitch = (float)raw1 / 32768.0f * 180.0f;
+                g_imu_yaw   = (float)raw2 / 32768.0f * 180.0f;
+                g_imu_present = 1;   /* 收到角度帧, 标记在线 */
+            } else if (s_frame_type == 0x52) {
+                /* 角速度帧: /32768*2000 = °/s (JY61P 默认量程 ±2000) */
+                g_imu_gyrox = (float)raw0 / 32768.0f * 2000.0f;
+                g_imu_gyroy = (float)raw1 / 32768.0f * 2000.0f;
+                g_imu_gyroz = (float)raw2 / 32768.0f * 2000.0f;
+            } else if (s_frame_type == 0x51) {
+                /* 加速度帧: /32768*16 = g (JY61P 默认量程 ±16g) */
+                g_imu_accx = (float)raw0 / 32768.0f * 16.0f;
+                g_imu_accy = (float)raw1 / 32768.0f * 16.0f;
+                g_imu_accz = (float)raw2 / 32768.0f * 16.0f;
             }
         }
         /* 校验失败: 丢弃当前帧, 回找下一帧 0x55
@@ -145,14 +166,14 @@ uint8_t IMU_Init(void)
 uint8_t IMU_Read_RPY(float *roll, float *pitch, float *yaw)
 {
     if (!g_imu_present || !g_use_imu) {
-        if (roll)  *roll  = s_roll_cached;
-        if (pitch) *pitch = s_pitch_cached;
-        if (yaw)   *yaw   = s_yaw_cached;
+        if (roll)  *roll  = g_imu_roll;
+        if (pitch) *pitch = g_imu_pitch;
+        if (yaw)   *yaw   = g_imu_yaw;
         return 1;
     }
-    if (roll)  *roll  = s_roll_cached;
-    if (pitch) *pitch = s_pitch_cached;
-    if (yaw)   *yaw   = s_yaw_cached;
+    if (roll)  *roll  = g_imu_roll;
+    if (pitch) *pitch = g_imu_pitch;
+    if (yaw)   *yaw   = g_imu_yaw;
     return 0;
 }
 
@@ -161,7 +182,7 @@ uint8_t IMU_Read_RPY(float *roll, float *pitch, float *yaw)
  */
 float IMU_Read_Yaw(void)
 {
-    return s_yaw_cached;
+    return g_imu_yaw;
 }
 
 /**
@@ -187,7 +208,7 @@ uint8_t IMU_Calibrate_Z(void)
     delay_ms(200);
 
     /* 归零后清缓存 (JY61P 会在下一帧输出归零后的角度) */
-    s_yaw_cached = 0.0f;
+    g_imu_yaw = 0.0f;
     return 0;
 }
 
@@ -212,5 +233,5 @@ void IMU_Poll(void)
  */
 float IMU_Get_Yaw_Cached(void)
 {
-    return s_yaw_cached;
+    return g_imu_yaw;
 }

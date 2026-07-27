@@ -42,6 +42,15 @@ extern uint8_t g_imu_present;
  * 改串口后不再与 OLED 互斥, 此标志仅控制 IMU 解析, 不影响 OLED */
 extern uint8_t g_use_imu;
 
+/* ────────────── 缓存数据 (解析后自动更新) ──────────────
+ * 0x53 角度帧: Roll/Pitch/Yaw (度)
+ * 0x52 角速度帧: GyroX/Y/Z (°/s, 量程 ±2000)
+ * 0x51 加速度帧: AccX/Y/Z (g, 量程 ±16g)
+ * JY61P 默认 10Hz 输出, 三种帧交替出现 */
+extern float g_imu_roll, g_imu_pitch, g_imu_yaw;
+extern float g_imu_gyrox, g_imu_gyroy, g_imu_gyroz;
+extern float g_imu_accx, g_imu_accy, g_imu_accz;
+
 /* ────────────── API ────────────── */
 
 /** 初始化: 等 200ms 看 UART_DEBUG 是否收到 JY61P 数据帧, 返回0=成功 */
@@ -56,7 +65,8 @@ float IMU_Read_Yaw(void);
 /** Z轴归零 (通过串口发归零命令给 JY61P), 返回0=已发送 */
 uint8_t IMU_Calibrate_Z(void);
 
-/** 每10ms轮询: 从 UART_DEBUG 取字节, 解析帧, 缓存 yaw */
+/** 主循环轮询: 从环形缓冲取字节解析 0x51/0x52/0x53 帧
+ *  每轮调用 (非 50ms 节拍), 降低 yaw 延迟避免车乱跑 */
 void IMU_Poll(void);
 
 /** 获取缓存的 yaw (度, -180~180) */

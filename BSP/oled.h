@@ -46,4 +46,10 @@ void OLED_PrintAt(uint8_t row, uint8_t col, const char *str);
 /** 格式化打印到指定位置 */
 void OLED_PrintfAt(uint8_t row, uint8_t col, const char *fmt, ...);
 
+/** 局部清除指定区域 (不清整个屏幕)
+ *  @param row 起始行 (0-3)
+ *  @param col 起始列 (0-15)
+ *  @param len 清除字符数 */
+void OLED_ClearArea(uint8_t row, uint8_t col, uint8_t len);
+
 #endif
