@@ -9,9 +9,9 @@
  *     3. 接收 ESP32 转发的调参命令
  * 
  * 初始化流程:
- *   1. SysConfig + 3秒延时
+ *   1. SysConfig + SysTick 1ms 时基
  *   2. 配置驱动板参数 (电机类型/减速比/磁环线/轮径)
- *   3. 进入主循环: 巡线 + 发速度 + 收命令
+ *   3. 进入主循环: 非阻塞调度 (巡线/电机 10ms + IMU 50ms)
  * 
  * 命令 (通过 WiFi→ESP32→UART):
  *   m0      巡线模式
@@ -34,12 +34,13 @@
 #include "BSP/button.h"
 #include "delay.h"
 
-/* ─── 驱板初始化指令序列 ─── */
-static void Driver_Board_Init(void)
+/* ─── SysTick 1ms 时基 (用于非阻塞调度, 代替 delay_ms 阻塞) ───
+ * 32MHz 主频 / 1000 = 32000 计数 → 每 1ms 触发一次中断
+ * SysTick_Handler 覆盖启动文件里的弱符号; delay.c 用 delay_cycles 不占 SysTick, 无冲突 */
+volatile uint32_t g_sys_tick = 0;
+void SysTick_Handler(void)
 {
-    /* I2C 方案: 驱动板参数通过 Motor_Init() 设置, 这里不需要额外操作 */
-    /* 如需改 PID, 通过串口发 $MPID:kp,ki,kd# */
-    (void)0;
+    g_sys_tick++;
 }
 
 /* ─── IMU 启用/暂停切换 ───
@@ -56,11 +57,19 @@ void switch_mode(uint8_t use_imu)
     }
 }
 
+/* ─── 正方形行进状态 (m3 模式) ───
+ * 状态机: 0=直行 1=转弯 2=完成
+ * edge: 已完成的边数 (0~4)
+ * yaw_base: 当前边的目标朝向 (度) */
+uint8_t g_square_state  = 0;
+uint8_t g_square_edge   = 0;
+float   g_square_yaw_base = 0.0f;
+
 int main(void)
 {
     SYSCFG_DL_init();
-    /* 延时 8 秒等 ESP32 WiFi 连上 PC, 否则启动信息发出去时 PC 还没连, 收不到 */
-    delay_ms(8000);
+    /* 启用 SysTick 1ms 中断 (32MHz → 32000 计数/ms) */
+    SysTick_Config(32000);
 
     /* 初始化模块 */
     CMD_SendText("[MSPM0] init: track\n");
@@ -71,11 +80,15 @@ int main(void)
     /* 配置驱动板 */
     CMD_SendText("[MSPM0] init: motor\n");
     Motor_Init();
-    Driver_Board_Init();
 
     /* ── IMU 初始化 (串口 UART_DEBUG, PA10/PA11, 9600bps) ──
-     * IMU 和 OLED 物理隔离, 不再互斥, 可同时工作 */
-    CMD_SendText("[MSPM0] init: imu (UART_DEBUG 9600bps)\n");
+     * IMU 和 OLED 物理隔离, 不再互斥, 可同时工作
+     * 延时 500ms 等 JY61P 上电启动 (JY61P 冷启动约需 200-500ms 才开始输出帧) */
+    delay_ms(500);
+    /* 启用 UART_DEBUG RX 中断: JY61P 字节到来自动进 ISR 搬到环形缓冲
+     * 不再依赖主循环轮询 PollRx, 不会因主循环阻塞丢字节 */
+    UART_Debug_EnableRxIRQ();
+    CMD_SendText("[MSPM0] init: imu (UART_DEBUG 9600bps, RX IRQ enabled)\n");
     if (IMU_Init() == 0) {
         CMD_SendText("[MSPM0] IMU JY61P OK\n");
     } else {
@@ -99,118 +112,167 @@ int main(void)
     Button_Init();
     CMD_SendText("[MSPM0] init done\n");
 
-    /* 巡线在主循环中轮询执行
-     * imu_tick 用作 IMU 降频计数 (每5次=50ms 解析一次) */
-    uint8_t imu_tick = 0;
+    /* 非阻塞调度: 高频任务每轮跑, 周期任务用 SysTick 时间戳
+     * UART_DEBUG 已改中断接收, RX 字节自动进 ISR 搬到环形缓冲, 主循环不再需要 PollRx
+     * 按钮消抖依赖 ~10ms 周期, 不能全速轮询, 故 Button_Poll 放 10ms 节拍 */
+    uint32_t last_10ms = 0;   /* 按钮/PID/电机 节拍 */
+    uint32_t last_50ms = 0;   /* IMU 解析节拍 */
 
     while (1) {
-        /* ── UART_DEBUG RX 搬运: 每周期都调, 把 JY61P 串口字节搬到环形缓冲区
-         *    必须在 IMU_Poll 之前调, 否则 IMU_Poll 取不到最新数据
-         *    g_uart_debug_echo=1 时 PollRx 内部会自动把字节回显到 PC */
-        UART_Debug_PollRx();
+        /* ── 高频任务: 每轮执行, 不漏调参命令 ──
+         * (JY61P 字节接收已由 UART0_IRQHandler 自动处理, 这里不需要 PollRx) */
+        CMD_Poll();            /* 串口调参命令 */
 
-        /* ── IMU 解析: 降频到每 50ms 一次, 仅当 IMU 接了且启用才解析 ──
-         *    IMU_Poll 内部从环形缓冲区取字节, 状态机解析 0x55 0x53 帧 */
-        if (g_use_imu && (++imu_tick >= 5)) {
-            imu_tick = 0;
-            IMU_Poll();
-        }
+        /* ── 10ms 节拍: 按钮消抖 + 巡线PID + 电机指令 ── */
+        if ((uint32_t)(g_sys_tick - last_10ms) >= 10) {
+            last_10ms = g_sys_tick;
 
-        /* ── 按钮轮询: 纯 GPIO 读取, 开销极小, 每 10ms 一次 ── */
-        Button_Poll();
-        btn_event_t evt;
-        while ((evt = Button_Get_Event()) != BTN_EVENT_NONE) {
-            switch (evt) {
-            case BTN_EVENT_START:
-                if (g_laps_done) {
-                    /* 跑完后按 START 重置圈数 */
-                    g_laps_done = 0;
+            Button_Poll();
+            btn_event_t evt;
+            while ((evt = Button_Get_Event()) != BTN_EVENT_NONE) {
+                switch (evt) {
+                case BTN_EVENT_START:
+                    if (g_laps_done) {
+                        /* 跑完后按 START 重置圈数 */
+                        g_laps_done = 0;
+                        g_current_lap = 0;
+                        g_corner_count = 0;
+                        g_running = 0;
+                        Motor_Stop();
+                        CMD_SendText("[MSPM0] LAPS DONE, reset\n");
+                    } else if (g_running) {
+                        g_running = 0;
+                        Motor_Stop();
+                        CMD_SendText("[MSPM0] BTN STOP\n");
+                    } else {
+                        g_running = 1;
+                        g_track_locked = 0;
+                        CMD_SendText("[MSPM0] BTN START\n");
+                    }
+                    break;
+                case BTN_EVENT_LAP_UP:
+                    if (!g_running && g_target_laps < 9) {
+                        g_target_laps++;
+                        CMD_SendText("[MSPM0] target_laps+1\n");
+                    }
+                    break;
+                case BTN_EVENT_MODE:
+                    /* 切换 IMU 解析开关 (IMU 改串口后不再与 OLED 互斥, 此按钮只切 IMU 解析) */
+                    switch_mode(!g_use_imu);
+                    break;
+                case BTN_EVENT_RESET:
+                    g_running = 0;
+                    Motor_Stop();
+                    if (g_imu_present) IMU_Calibrate_Z();
+                    Odom_Reset();
                     g_current_lap = 0;
                     g_corner_count = 0;
-                    g_running = 0;
-                    Motor_Stop();
-                    CMD_SendText("[MSPM0] LAPS DONE, reset\n");
-                } else if (g_running) {
-                    g_running = 0;
-                    Motor_Stop();
-                    CMD_SendText("[MSPM0] BTN STOP\n");
-                } else {
-                    g_running = 1;
-                    g_track_locked = 0;
-                    CMD_SendText("[MSPM0] BTN START\n");
+                    g_laps_done = 0;
+                    CMD_SendText("[MSPM0] BTN RESET\n");
+                    break;
+                default: break;
                 }
-                break;
-            case BTN_EVENT_LAP_UP:
-                if (!g_running && g_target_laps < 9) {
-                    g_target_laps++;
-                    CMD_SendText("[MSPM0] target_laps+1\n");
-                }
-                break;
-            case BTN_EVENT_MODE:
-                /* 切换 IMU 解析开关: 取反 g_use_imu, switch_mode 内会发通知给电脑
-                 * (IMU 改串口后不再与 OLED 互斥, 此按钮只切 IMU 解析) */
-                switch_mode(!g_use_imu);
-                break;
-            case BTN_EVENT_RESET:
+            }
+
+            if (g_laps_done && g_running) {
                 g_running = 0;
                 Motor_Stop();
-                if (g_imu_present) IMU_Calibrate_Z();
-                Odom_Reset();
-                g_current_lap = 0;
-                g_corner_count = 0;
-                g_laps_done = 0;
-                CMD_SendText("[MSPM0] BTN RESET\n");
-                break;
-            default: break;
+                CMD_SendText("[MSPM0] LAPS DONE! auto-stop\n");
+            }
+
+            /* ── 运行/停止/模式控制 ── */
+            if (!g_running) {
+                g_motor_l_speed = 0;
+                g_motor_r_speed = 0;
+            } else if (g_mode == 0) {
+                Track_Loop();
+                Odom_Update();   /* 巡线模式也推里程计 (过弯检测/圈数用) */
+            } else if (g_mode == 3) {
+                /* ── 正方形行进 (非灰度, 纯 IMU + 编码器里程) ──
+                 * 切 m3 时在 cmd.c 锁定起点 yaw_target + Odom_Reset
+                 * 状态机: 直线走 1500mm → 原地左转 90° → 下一条边, 走完 4 条边停车
+                 * 左转 = 逆时针 = yaw 增加 (JY61P 约定) */
+                extern uint8_t g_square_state;   /* 0=直行 1=转弯 2=完成 */
+                extern uint8_t g_square_edge;
+                extern float   g_square_yaw_base;
+                #define SQ_EDGE_LEN    1500.0f   /* 边长 mm */
+                #define SQ_TURN_THRESH 5.0f      /* 转弯到位阈值 (度) */
+                #define SQ_BASE_SPD    200       /* 直行基础速度 */
+                #define SQ_TURN_SPD    200       /* 原地转弯速度 */
+                #define SQ_YAW_KP       30.0f    /* 直行 yaw 修正 P (驱动板单位/度) */
+
+                float yaw_now = IMU_Get_Yaw_Cached();
+                g_yaw_now = yaw_now;
+
+                if (g_square_state == 2) {
+                    /* 已完成 4 条边, 停车 */
+                    g_motor_l_speed = 0;
+                    g_motor_r_speed = 0;
+                    g_running = 0;
+                    Motor_Stop();
+                    CMD_SendText("[MSPM0] SQUARE DONE! auto-stop\n");
+                } else if (g_square_state == 0) {
+                    /* 直行阶段: 走直线, 用 yaw 误差做差速保持直行 */
+                    float err = g_square_yaw_base - yaw_now;
+                    if (err > 180.0f)  err -= 360.0f;
+                    if (err < -180.0f) err += 360.0f;
+                    g_yaw_err = err;
+                    float correction = err * SQ_YAW_KP;
+                    if (correction > 150.0f)  correction = 150.0f;
+                    if (correction < -150.0f) correction = -150.0f;
+                    g_motor_l_speed = (int16_t)(SQ_BASE_SPD - correction);
+                    g_motor_r_speed = (int16_t)(SQ_BASE_SPD + correction);
+                    /* 判断是否走完一条边 */
+                    if (Odom_Get_Edge_Dist() >= SQ_EDGE_LEN) {
+                        g_square_state = 1;
+                        /* 转弯目标 = 当前朝向 + 90° (左转, 逆时针为正) */
+                        g_square_yaw_base = yaw_now + 90.0f;
+                        if (g_square_yaw_base > 180.0f) g_square_yaw_base -= 360.0f;
+                        CMD_SendText("[MSPM0] SQUARE: edge done, turning\n");
+                    }
+                } else {
+                    /* 转弯阶段: 原地左转 (左轮反转, 右轮正转) */
+                    float err = g_square_yaw_base - yaw_now;
+                    if (err > 180.0f)  err -= 360.0f;
+                    if (err < -180.0f) err += 360.0f;
+                    g_yaw_err = err;
+                    /* 未到位: 继续转 */
+                    if (err > SQ_TURN_THRESH) {
+                        /* 目标在当前朝向左侧 (yaw 需增加), 左转 */
+                        g_motor_l_speed = -SQ_TURN_SPD;
+                        g_motor_r_speed =  SQ_TURN_SPD;
+                    } else if (err < -SQ_TURN_THRESH) {
+                        /* 过冲, 右转修正 */
+                        g_motor_l_speed =  SQ_TURN_SPD;
+                        g_motor_r_speed = -SQ_TURN_SPD;
+                    } else {
+                        /* 到位, 进下一条边 */
+                        g_square_state = 0;
+                        g_square_edge++;
+                        g_square_yaw_base = yaw_now;   /* 锁新朝向 */
+                        Odom_Reset_Edge();
+                        if (g_square_edge >= 4) {
+                            g_square_state = 2;   /* 4 条边走完 */
+                        }
+                        CMD_SendText("[MSPM0] SQUARE: turn done, next edge\n");
+                    }
+                }
+            } else {
+                g_motor_l_speed = (int16_t)g_target_rpm;
+                g_motor_r_speed = (int16_t)g_target_rpm;
+            }
+
+            /* ── 发送速度指令给驱动板 ── */
+            Motor_Send_Speed(0, -g_motor_r_speed, 0, -g_motor_l_speed);
+        }
+
+        /* ── 50ms 节拍: IMU 帧解析 (JY61P 10Hz 输出, 50ms 够用) ──
+         *    字节已由 UART0_IRQHandler (RX 中断) 自动搬进环形缓冲, 这里只做帧解析 */
+        if ((uint32_t)(g_sys_tick - last_50ms) >= 50) {
+            last_50ms = g_sys_tick;
+            if (g_use_imu) {
+                IMU_Poll();
             }
         }
-
-        if (g_laps_done && g_running) {
-            g_running = 0;
-            Motor_Stop();
-            CMD_SendText("[MSPM0] LAPS DONE! auto-stop\n");
-        }
-
-        /* ── 运行/停止控制 ── */
-        if (!g_running) {
-            g_motor_l_speed = 0;
-            g_motor_r_speed = 0;
-        } else if (g_mode == 0) {
-            Track_Loop();
-        } else if (g_mode == 3) {
-            /* ── 不倒翁模式 (IMU yaw 自稳): 手转车自动回正到切 m3 时的朝向 ──
-             * 切 m3 时在 cmd.c 的 case 'm' 中锁目标, 这里只做 PID 修正 */
-            float yaw_now = IMU_Get_Yaw_Cached();
-            float err = g_yaw_target - yaw_now;
-            /* 角度回绕: 误差超过 ±180° 时取最短路径 */
-            if (err > 180.0f)  err -= 360.0f;
-            if (err < -180.0f) err += 360.0f;
-            g_yaw_now = yaw_now;
-            g_yaw_err = err;
-            /* 简单 P 控制: P=30 驱动板单位/度, ±400 限幅 */
-            float base = 0.0f;
-            float correction = err * 30.0f;
-            if (correction > 400.0f)  correction = 400.0f;
-            if (correction < -400.0f) correction = -400.0f;
-            g_motor_l_speed = (int16_t)(base - correction);
-            g_motor_r_speed = (int16_t)(base + correction);
-        } else {
-            g_motor_l_speed = (int16_t)g_target_rpm;
-            g_motor_r_speed = (int16_t)g_target_rpm;
-        }
-
-        /* ── 发送速度指令给驱动板 ── */
-        Motor_Send_Speed(0, -g_motor_r_speed, 0, -g_motor_l_speed);
-
-        /* ── 接收调参命令 ── */
-        CMD_Poll();
-
-        /* ── 第二轮 IMU RX 搬运: 避免 4 字节 FIFO 在 10ms 内溢出 ──
-         * 9600bps 每 10ms 到 ~10 字节, MSPM0 UART FIFO 仅 4 字节,
-         * 单次 PollRx 每周期会丢 ~6 字节。连续两次 = 每 5ms 等效, 不溢出。 */
-        UART_Debug_PollRx();
-
-        /* ── 控制刷新率 ~10ms ── */
-        delay_ms(10);
     }
 }

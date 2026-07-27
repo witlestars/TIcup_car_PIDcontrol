@@ -229,15 +229,23 @@ static void CMD_Exec(void)
         break;
     case 'm':
         if (v > 2.5f) {
-            g_mode = 3;   /* m3=不倒翁模式 */
-            /* 锁当前 yaw 为目标, 之后车会自动回正到这个朝向 */
-            g_yaw_target = IMU_Get_Yaw_Cached();
+            g_mode = 3;   /* m3=正方形行进 (纯 IMU + 编码器, 非灰度) */
+            /* 初始化正方形状态机: 锁当前 yaw 为第 0 条边的目标朝向,
+             * 复位里程计 (起点 0,0), 状态=直行, 边数=0 */
+            extern uint8_t g_square_state;
+            extern uint8_t g_square_edge;
+            extern float   g_square_yaw_base;
+            g_square_state = 0;
+            g_square_edge = 0;
+            g_square_yaw_base = IMU_Get_Yaw_Cached();
+            Odom_Reset();
+            g_yaw_target = g_square_yaw_base;
         } else {
             g_mode = (v > 0.5f) ? 1 : 0;
         }
         snprintf(ack, sizeof(ack), "[MSPM0] mode=%d (%s) yaw_target=%.1f\n",
                  g_mode,
-                 g_mode == 0 ? "TRACK" : g_mode == 1 ? "IDLE" : "GYRO_LOCK",
+                 g_mode == 0 ? "TRACK" : g_mode == 1 ? "IDLE" : "SQUARE",
                  g_yaw_target);
         CMD_SendText(ack);
         break;

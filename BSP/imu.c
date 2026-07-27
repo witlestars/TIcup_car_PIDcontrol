@@ -71,19 +71,24 @@ static void imu_parse_byte(uint8_t b)
         break;
 
     case PS_SUM:
-        /* 校验和: 部分 JY61P 固件版本的校验和算法与标准文档有差异,
-         * 跳过严格校验, 信任 0x55 + type 帧头已足够可靠 (误判概率极低) */
-        (void)b;   /* 不检查校验和, 仅消费该字节 */
-        if (s_frame_type == 0x53) {
-            int16_t raw_r = (int16_t)(((uint16_t)s_data_buf[1] << 8) | s_data_buf[0]);
-            int16_t raw_p = (int16_t)(((uint16_t)s_data_buf[3] << 8) | s_data_buf[2]);
-            int16_t raw_y = (int16_t)(((uint16_t)s_data_buf[5] << 8) | s_data_buf[4]);
-            s_roll_cached  = (float)raw_r / 32768.0f * 180.0f;
-            s_pitch_cached = (float)raw_p / 32768.0f * 180.0f;
-            s_yaw_cached   = (float)raw_y / 32768.0f * 180.0f;
-            g_imu_present = 1;   /* 至少收到一帧, 标记在线 */
+        /* 校验和: SUM = (0x55 + type + Σdata[0..7]) & 0xFF
+         * 必须严格校验, 否则数据区里的 0x55 会被误判为帧头,
+         * 导致帧同步漂移 (0x51 加速度帧数据区常含 0x55,
+         * 被误判后 0x53 角度帧的数据索引全错, yaw 解出来恒为 0) */
+        if (b == (uint8_t)(s_sum & 0xFF)) {
+            /* 校验通过, 是真帧 */
+            if (s_frame_type == 0x53) {
+                int16_t raw_r = (int16_t)(((uint16_t)s_data_buf[1] << 8) | s_data_buf[0]);
+                int16_t raw_p = (int16_t)(((uint16_t)s_data_buf[3] << 8) | s_data_buf[2]);
+                int16_t raw_y = (int16_t)(((uint16_t)s_data_buf[5] << 8) | s_data_buf[4]);
+                s_roll_cached  = (float)raw_r / 32768.0f * 180.0f;
+                s_pitch_cached = (float)raw_p / 32768.0f * 180.0f;
+                s_yaw_cached   = (float)raw_y / 32768.0f * 180.0f;
+                g_imu_present = 1;   /* 至少收到一帧, 标记在线 */
+            }
         }
-        /* 无论校验结果如何, 都回找下一帧 0x55 */
+        /* 校验失败: 丢弃当前帧, 回找下一帧 0x55
+         * (不更新缓存, 不置 g_imu_present, 等下一真帧) */
         s_state = PS_FIND_55;
         break;
 
@@ -116,9 +121,9 @@ uint8_t IMU_Init(void)
         (void)DL_UART_Main_receiveData(UART_DEBUG_INST);
     }
 
-    /* 等 200ms 看是否收到有效帧 (JY61P 默认 10Hz, 每 5ms 轮询避免 FIFO 溢出)
+    /* 等 1000ms 看是否收到有效帧 (JY61P 默认 10Hz=100ms/帧, 冷启动需 200-500ms)
      * MSPM0 UART FIFO 仅 4 字节, 9600bps 每 10ms 到 ~10 字节, 必须 ≤5ms 轮询 */
-    for (uint16_t i = 0; i < 40; i++) {
+    for (uint16_t i = 0; i < 200; i++) {
         delay_ms(5);
         UART_Debug_PollRx();
         uint8_t b;
