@@ -188,7 +188,7 @@ static void CMD_Exec(void)
                  "       imu=%d oled=%d use_imu=%d laps=%d/%d (1=present,0=not)\n",
                  g_mode, g_running, g_base_speed, g_turn_p, g_turn_d,
                  g_pivot_speed, g_corner_fwd_ms, g_target_rpm,
-                 g_yaw_now, g_yaw_target, g_yaw_err, g_imu_assist,
+                 IMU_Get_Yaw_Cached(), g_yaw_target, g_yaw_err, g_imu_assist,
                  Odom_Get_X(), Odom_Get_Y(), Odom_Get_Total_Dist(), Odom_Get_Edge_Index(),
                  g_imu_present, g_oled_present, g_use_imu, g_current_lap, g_target_laps);
         CMD_SendText(ack);
