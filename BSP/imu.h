@@ -1,6 +1,6 @@
 /**
  * @file    imu.h
- * @brief   维特智能 JY61P 串口驱动 (UART_DEBUG, 9600bps, PA10/PA11)
+ * @brief   维特智能 JY61P 串口驱动 (UART_IMU, 9600bps, PA10/PA11)
  *          ISR + 环形缓冲 + 帧解析, 合并原 imu_uart.c
  */
 

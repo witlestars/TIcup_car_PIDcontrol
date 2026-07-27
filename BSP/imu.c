@@ -1,6 +1,6 @@
 /**
  * @file    imu.c
- * @brief   维特智能 JY61P 串口驱动 (UART_DEBUG, 9600bps, PA10/PA11)
+ * @brief   维特智能 JY61P 串口驱动 (UART_IMU, 9600bps, PA10/PA11)
  *          合并原 imu_uart.c, 统一管理 ISR + 环形缓冲 + 帧解析
  *
  * 帧格式 (11字节): [0x55][TYPE][D0..D7][SUM]
@@ -38,20 +38,20 @@ static uint8_t s_frame_type, s_data_idx, s_data_buf[8], s_sum;
 
 void IMU_EnableRxIRQ(void)
 {
-    NVIC_ClearPendingIRQ(UART_DEBUG_INST_INT_IRQN);
-    DL_UART_Main_enableInterrupt(UART_DEBUG_INST,
+    NVIC_ClearPendingIRQ(UART_IMU_INST_INT_IRQN);
+    DL_UART_Main_enableInterrupt(UART_IMU_INST,
         DL_UART_MAIN_INTERRUPT_RX | DL_UART_MAIN_INTERRUPT_OVERRUN_ERROR);
-    NVIC_EnableIRQ(UART_DEBUG_INST_INT_IRQN);
+    NVIC_EnableIRQ(UART_IMU_INST_INT_IRQN);
 }
 
 /* UART0 RX 中断: 搬字节到环形缓冲, ISR 内不做 echo/解析 (防卡死) */
 void UART0_IRQHandler(void)
 {
-    uint32_t irq = DL_UART_Main_getPendingInterrupt(UART_DEBUG_INST);
+    uint32_t irq = DL_UART_Main_getPendingInterrupt(UART_IMU_INST);
     switch (irq) {
     case DL_UART_MAIN_IIDX_RX:
-        while (!DL_UART_Main_isRXFIFOEmpty(UART_DEBUG_INST)) {
-            uint8_t b = (uint8_t)DL_UART_Main_receiveData(UART_DEBUG_INST);
+        while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
+            uint8_t b = (uint8_t)DL_UART_Main_receiveData(UART_IMU_INST);
             uint8_t next = (uint8_t)(s_rx_head + 1);
             if (next != s_rx_tail) {
                 s_rx_buf[s_rx_head] = b;
@@ -60,8 +60,8 @@ void UART0_IRQHandler(void)
         }
         break;
     case DL_UART_MAIN_IIDX_OVERRUN_ERROR:
-        while (!DL_UART_Main_isRXFIFOEmpty(UART_DEBUG_INST)) {
-            (void)DL_UART_Main_receiveData(UART_DEBUG_INST);
+        while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
+            (void)DL_UART_Main_receiveData(UART_IMU_INST);
         }
         break;
     default:
@@ -82,9 +82,9 @@ void IMU_SendBytes(const uint8_t *data, uint8_t len)
 {
     for (uint8_t i = 0; i < len; i++) {
         uint16_t timeout = 60000;
-        while (DL_UART_Main_isTXFIFOFull(UART_DEBUG_INST) && timeout--);
+        while (DL_UART_Main_isTXFIFOFull(UART_IMU_INST) && timeout--);
         if (timeout == 0) break;
-        DL_UART_Main_transmitDataBlocking(UART_DEBUG_INST, data[i]);
+        DL_UART_Main_transmitDataBlocking(UART_IMU_INST, data[i]);
     }
 }
 
@@ -162,8 +162,8 @@ uint8_t IMU_Init(void)
 {
     if (!g_use_imu) { g_imu_present = 0; return 0xFF; }
     s_state = PS_FIND_55; s_data_idx = 0; g_imu_present = 0;
-    while (!DL_UART_Main_isRXFIFOEmpty(UART_DEBUG_INST)) {
-        (void)DL_UART_Main_receiveData(UART_DEBUG_INST);
+    while (!DL_UART_Main_isRXFIFOEmpty(UART_IMUUGNST)) {
+        (void)DL_UART_Main_receiveData(UART_IMU_INST);
     }
     for (uint16_t i = 0; i < 200; i++) {
         delay_ms(5);

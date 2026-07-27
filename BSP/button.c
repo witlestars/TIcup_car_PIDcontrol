@@ -30,11 +30,19 @@ void Button_Init(void)
 {
     g_btn_flag = 0;
     for (uint8_t i = 0; i < 4; i++) s_last_tick[i] = 0;
+
+    /* SysConfig 只开了 GPIO 外设级中断 (DL_GPIO_enableInterrupt), NVIC 没开。
+     * MSPM0G3507 的 GPIO 中断走 GROUP1 (IRQn=1), 不是 GROUP0 —
+     * 之前误用 GROUP0_IRQHandler 导致按钮中断从不触发。这里补 NVIC 使能 */
+    NVIC_ClearPendingIRQ(GPIO_BUTTON_GPIOA_INT_IRQN);
+    NVIC_ClearPendingIRQ(GPIO_BUTTON_GPIOB_INT_IRQN);
+    NVIC_EnableIRQ(GPIO_BUTTON_GPIOA_INT_IRQN);
+    NVIC_EnableIRQ(GPIO_BUTTON_GPIOB_INT_IRQN);
 }
 
-/* GPIO GROUP0 中断: MSPM0G3507 默认所有 GPIO 中断走 GROUP0
+/* GPIO GROUP1 中断: MSPM0G3507 的 GPIOA/GPIOB 中断都走 GROUP1 (IRQn=1)
  * 同时检查 GPIOA(PA7/PA18) 和 GPIOB(PB1/PB14), ISR 只设标志位 */
-void GROUP0_IRQHandler(void)
+void GROUP1_IRQHandler(void)
 {
     uint32_t now = g_sys_tick;
 

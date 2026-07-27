@@ -19,7 +19,7 @@
  *   E0/E1   IMU 解析开关 (改串口后不再与OLED互斥): E1=启用IMU解析, E0=暂停IMU解析
  *   L3      设置目标圈数 = 3 (替代原 LAP_DN 按钮, 范围1~9)
  *   e0/e1   切换 IMU 辅助转弯
- *   U       切换 UART_DEBUG 原始字节回显 (诊断 JY61P 串口, 开关型)
+ *   U       切换 UART_IMU 原始字节回显 (诊断 JY61P 串口, 开关型)
  *   ?       回传当前参数
  *   B       回显启动状态 (各模块 + 引脚 + 模式)
  */
@@ -53,6 +53,18 @@ uint8_t g_imu_uart_echo = 0;  /* 1=把 IMU 串口收到的原始字节回显到 
 static float drv_kp = 0.8f;
 static float drv_ki = 0.06f;
 static float drv_kd = 0.5f;
+
+/* ─── m3 正方形行进 / T 命令 状态机全局变量 ───
+ * 状态机: 0=直行 1=转弯 2=完成 3=刹车(停车200ms消惯性)
+ * 左转=yaw+ (JY61P倒扣: 从车顶看左转=模块顶面顺时针=维特yaw+)
+ * T命令(g_one_shot_turn=1)优先级最高: 单次转弯后停车 */
+uint8_t g_square_state    = 0;     /* 0=直行 1=转弯 2=完成 3=刹车 */
+uint8_t g_square_edge     = 0;     /* 已完成边数 (0~4) */
+float   g_square_yaw_base = 0.0f;  /* 当前边直行目标朝向 */
+float   g_turn_start_yaw  = 0.0f;  /* 当前转弯起点 yaw */
+uint8_t g_one_shot_turn   = 0;     /* T 命令单次转弯标志 */
+float   g_one_shot_angle  = 0.0f;  /* T 命令目标角度 */
+static uint32_t g_brake_start = 0; /* 刹车开始时间戳 */
 
 /* ─── 文本回传: 通过 UART_BLUETOOTH 发文本给 ESP32 → 电脑 ───
  * 文本帧格式: 以 \n 结尾 (电脑端按行解析)
@@ -209,7 +221,7 @@ static void CMD_Exec(void)
             }
         }
         break;
-    case 'J':   /* IMU 串口诊断: 显示 UART_DEBUG (PA10/PA11) 是否收到 JY61P 数据
+    case 'J':   /* IMU 串口诊断: 显示 UART_IMU (PA10/PA11) 是否收到 JY61P 数据
                  * IMU 已改串口, 原 I2C 探测无意义, 此命令读当前缓存角度并报告状态 */
         CMD_SendText("[MSPM0] === IMU UART Debug (PA10/PA11, 9600bps) ===\n");
         {
@@ -223,25 +235,14 @@ static void CMD_Exec(void)
             if (!g_imu_present) {
                 CMD_SendText("[MSPM0] IMU no frame received yet.\n"
                              "       check wiring: JY61P TX→PA11, RX→PA10, VCC→3.3V, GND→GND\n"
-                             "       check JY61P baudrate (default 9600), check UART_DEBUG baudrate=9600\n");
+                             "       check JY61P baudrate (default 9600), check UART_IMU baudrate=9600\n");
             }
         }
         break;
     case 'm':
         if (v > 2.5f) {
-            g_mode = 3;   /* m3=正方形行进 (纯 IMU + 编码器, 非灰度) */
-            /* 初始化正方形状态机: 锁当前 yaw 为第 0 条边的目标朝向,
-             * 复位里程计 (起点 0,0), 状态=直行, 边数=0 */
-            extern uint8_t g_square_state;
-            extern uint8_t g_square_edge;
-            extern float   g_square_yaw_base;
-            extern uint8_t g_one_shot_turn;
-            g_square_state = 0;
-            g_square_edge = 0;
-            g_square_yaw_base = IMU_Get_Yaw_Cached();
-            g_one_shot_turn = 0;    /* 切 m3 时清掉单次转弯标志, 走正常方形 */
-            Odom_Reset();
-            g_yaw_target = g_square_yaw_base;
+            g_mode = 3;
+            Square_Init();   /* 锁当前yaw, 复位状态机和里程计 */
         } else {
             g_mode = (v > 0.5f) ? 1 : 0;
         }
@@ -251,32 +252,8 @@ static void CMD_Exec(void)
                  g_yaw_target);
         CMD_SendText(ack);
         break;
-    case 'T':   /* 转任意角度: T90=左转90°, T-45=右转45° (正=左转 yaw+, 与m3一致)
-                 * 任意模式下发送都会切到 m3, 执行单次转弯后自动停车
-                 * 完成后 g_mode 保持 3, 用户可手动 m0/m1 切回原模式 */
-        {
-            extern uint8_t g_one_shot_turn;
-            extern float   g_one_shot_angle;
-            extern float   g_turn_start_yaw;
-            if (!g_imu_present) {
-                CMD_SendText("[MSPM0] TURN: IMU offline, refused\n");
-                break;
-            }
-            if (v < -360.0f || v > 360.0f) {
-                snprintf(ack, sizeof(ack),
-                    "[MSPM0] TURN: invalid angle %.1f (must -360~360)\n", v);
-                CMD_SendText(ack);
-                break;
-            }
-            g_one_shot_turn  = 1;
-            g_one_shot_angle = v;
-            g_turn_start_yaw = IMU_Get_Yaw_Cached();
-            g_mode = 3;        /* 切到 m3 让主循环执行转弯 */
-            g_running = 1;     /* 自动启动 */
-            snprintf(ack, sizeof(ack),
-                "[MSPM0] TURN: target=%.1f deg (positive=left), mode=3, running\n", v);
-            CMD_SendText(ack);
-        }
+    case 'T':   /* 转任意角度: T90=左转90°, T-45=右转45° (正=左转, 与m3一致) */
+        Square_Turn(v);
         break;
     case 't':
         g_target_rpm = v;
@@ -318,21 +295,13 @@ static void CMD_Exec(void)
         }
         break;
     case 'y':   /* 查询 yaw + 转弯状态 + m3 状态机 */
-        {
-            extern uint8_t g_square_state;
-            extern uint8_t g_square_edge;
-            extern uint8_t g_one_shot_turn;
-            extern float   g_one_shot_angle;
-            extern float   g_turn_start_yaw;
-            extern float   g_yaw_now;
-            snprintf(ack, sizeof(ack),
-                "[MSPM0] yaw=%.2f target=%.2f err=%.2f assist=%d\n"
-                "       m3: state=%d edge=%d turn_start=%.2f | one_shot=%d angle=%.1f\n",
-                g_yaw_now, g_yaw_target, g_yaw_err, g_imu_assist,
-                g_square_state, g_square_edge, g_turn_start_yaw,
-                g_one_shot_turn, g_one_shot_angle);
-            CMD_SendText(ack);
-        }
+        snprintf(ack, sizeof(ack),
+            "[MSPM0] yaw=%.2f target=%.2f err=%.2f assist=%d\n"
+            "       m3: state=%d edge=%d turn_start=%.2f | one_shot=%d angle=%.1f\n",
+            g_yaw_now, g_yaw_target, g_yaw_err, g_imu_assist,
+            g_square_state, g_square_edge, g_turn_start_yaw,
+            g_one_shot_turn, g_one_shot_angle);
+        CMD_SendText(ack);
         break;
     case 'x':   /* 查询位置 */
         snprintf(ack, sizeof(ack),
@@ -380,7 +349,7 @@ static void CMD_Exec(void)
             "       track: OK\n"
             "       cmd:   OK\n"
             "       motor: OK ( drv_pid=%.2f/%.3f/%.2f )\n"
-            "       imu:   %s (g_imu_present=%d, via UART_DEBUG 9600bps)\n"
+            "       imu:   %s (g_imu_present=%d, via UART_IMU 9600bps)\n"
             "       odom:  OK\n"
             "       oled:  %s (g_oled_present=%d, via I2C PA17/PA15)\n"
             "       button:OK\n"
@@ -532,4 +501,157 @@ void CMD_Poll(void)
      * 现在只在收到命令时才回复, 数据量小不会丢
      * 需要调试数据时用 ? 命令查询当前状态 */
 #endif
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * m3 正方形行进 + T 命令单次转弯 (纯 IMU + 编码器, 非灰度)
+ * 从原 square.c 合并而来, 状态机 + T 命令统一管理
+ * ═══════════════════════════════════════════════════════════════════════ */
+extern volatile uint32_t g_sys_tick;   /* main.c 的 1ms 时基 */
+
+#define SQ_EDGE_LEN    1500.0f   /* 边长 mm */
+#define SQ_TURN_THRESH 5.0f      /* 转弯到位阈值 (度) */
+#define SQ_BASE_SPD    80        /* 直行速度 */
+#define SQ_TURN_SPD    60        /* 转弯速度 */
+#define SQ_YAW_KP      15.0f     /* 直行yaw修正P */
+#define SQ_YAW_CLIP    40        /* 修正最大差速 */
+#define SQ_BRAKE_MS    200       /* 刹车时间 ms */
+
+/* 角度归一化到 -180~180 */
+static float square_norm_angle(float a)
+{
+    while (a > 180.0f)  a -= 360.0f;
+    while (a < -180.0f) a += 360.0f;
+    return a;
+}
+
+void Square_Init(void)
+{
+    g_square_state = 0;
+    g_square_edge = 0;
+    g_square_yaw_base = IMU_Get_Yaw_Cached();
+    g_one_shot_turn = 0;
+    Odom_Reset();
+    g_yaw_target = g_square_yaw_base;
+}
+
+void Square_Turn(float angle)
+{
+    if (!g_imu_present) {
+        CMD_SendText("[MSPM0] TURN: IMU offline, refused\n");
+        return;
+    }
+    if (angle < -360.0f || angle > 360.0f) {
+        CMD_SendText("[MSPM0] TURN: invalid angle\n");
+        return;
+    }
+    g_one_shot_turn  = 1;
+    g_one_shot_angle = angle;
+    g_turn_start_yaw = IMU_Get_Yaw_Cached();
+    g_mode = 3;
+    g_running = 1;
+    CMD_SendText("[MSPM0] TURN: target angle set, running\n");
+}
+
+/* T 命令单次转弯: delta=now-start, err=target-delta */
+static void square_one_shot(float yaw_now)
+{
+    float delta = square_norm_angle(yaw_now - g_turn_start_yaw);
+    float err = g_one_shot_angle - delta;
+    g_yaw_err = err;
+    if (err > SQ_TURN_THRESH) {
+        g_motor_l_speed = -SQ_TURN_SPD;   /* 左转 */
+        g_motor_r_speed =  SQ_TURN_SPD;
+    } else if (err < -SQ_TURN_THRESH) {
+        g_motor_l_speed =  SQ_TURN_SPD;   /* 右转 */
+        g_motor_r_speed = -SQ_TURN_SPD;
+    } else {
+        g_one_shot_turn = 0; g_running = 0; Motor_Stop();
+        CMD_SendText("[MSPM0] TURN done\n");
+    }
+}
+
+/* state=0 直行: yaw误差做差速保持直线 */
+static void square_straight(float yaw_now)
+{
+    float err = square_norm_angle(g_square_yaw_base - yaw_now);
+    g_yaw_err = err;
+    float correction = err * SQ_YAW_KP;
+    if (correction >  SQ_YAW_CLIP) correction =  SQ_YAW_CLIP;
+    if (correction < -SQ_YAW_CLIP) correction = -SQ_YAW_CLIP;
+    g_motor_l_speed = (int16_t)(SQ_BASE_SPD - correction);
+    g_motor_r_speed = (int16_t)(SQ_BASE_SPD + correction);
+    if (Odom_Get_Edge_Dist() >= SQ_EDGE_LEN) {
+        g_square_state = 1;
+        g_turn_start_yaw = yaw_now;
+        CMD_SendText("[MSPM0] SQUARE: edge done, turning\n");
+    }
+}
+
+/* state=1 转弯: 原地左转90°, delta=now-start 目标90° */
+static void square_turn(float yaw_now)
+{
+    float delta = square_norm_angle(yaw_now - g_turn_start_yaw);
+    float err = 90.0f - delta;
+    g_yaw_err = err;
+    if (err > SQ_TURN_THRESH) {
+        g_motor_l_speed = -SQ_TURN_SPD;   /* 左转 */
+        g_motor_r_speed =  SQ_TURN_SPD;
+    } else if (err < -SQ_TURN_THRESH) {
+        g_motor_l_speed =  SQ_TURN_SPD;   /* 过冲, 右转修正 */
+        g_motor_r_speed = -SQ_TURN_SPD;
+    } else {
+        g_square_state = 3;  /* 到位进刹车 */
+        g_brake_start = g_sys_tick;
+        CMD_SendText("[MSPM0] SQUARE: turn done, braking\n");
+    }
+}
+
+/* state=3 刹车: 停车消惯性再切直行 */
+static void square_brake(void)
+{
+    g_motor_l_speed = 0; g_motor_r_speed = 0;
+    if ((uint32_t)(g_sys_tick - g_brake_start) >= SQ_BRAKE_MS) {
+        g_square_yaw_base = IMU_Get_Yaw_Cached();
+        Odom_Reset_Edge();
+        g_square_edge++;
+        if (g_square_edge >= 4) {
+            g_square_state = 2;
+            CMD_SendText("[MSPM0] SQUARE: all edges done\n");
+        } else {
+            g_square_state = 0;
+            CMD_SendText("[MSPM0] SQUARE: next edge\n");
+        }
+    }
+}
+
+void Square_Loop(void)
+{
+    /* IMU离线保护 */
+    if (!g_imu_present) {
+        g_motor_l_speed = 0; g_motor_r_speed = 0;
+        if (g_running) {
+            g_running = 0; Motor_Stop();
+            CMD_SendText("[MSPM0] SQUARE: IMU offline, stop\n");
+        }
+        return;
+    }
+
+    float yaw_now = IMU_Get_Yaw_Cached();
+    g_yaw_now = yaw_now;
+
+    if (g_one_shot_turn) {
+        square_one_shot(yaw_now);
+    } else {
+        switch (g_square_state) {
+        case 2:  /* 完成, 停车 */
+            g_motor_l_speed = 0; g_motor_r_speed = 0;
+            g_running = 0; Motor_Stop();
+            CMD_SendText("[MSPM0] SQUARE DONE! auto-stop\n");
+            break;
+        case 3:  square_brake();              break;
+        case 0:  square_straight(yaw_now);    break;
+        default: square_turn(yaw_now);        break;  /* state==1 */
+        }
+    }
 }
