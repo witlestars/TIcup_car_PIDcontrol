@@ -59,12 +59,22 @@ void switch_mode(uint8_t use_imu)
 }
 
 /* ─── 正方形行进状态 (m3 模式) ───
- * 状态机: 0=直行 1=转弯 2=完成
+ * 状态机: 0=直行 1=转弯 2=完成 3=刹车(停车200ms等惯性消除)
  * edge: 已完成的边数 (0~4)
- * yaw_base: 当前边的目标朝向 (度) */
-uint8_t g_square_state  = 0;
-uint8_t g_square_edge   = 0;
+ * g_square_yaw_base: 当前边直行的目标朝向 (度, 用于直行保持)
+ * g_turn_start_yaw:  当前转弯开始时的 yaw (度, 转弯用相对变化幅度判定)
+ *                    delta = yaw_now - g_turn_start_yaw, 目标 delta=90° (左转, yaw+)
+ *                    (JY61P 倒扣安装: 从车顶看左转=逆时针=yaw增加)
+ * g_one_shot_turn:   T 命令触发的单次转弯 (1=待执行), 完成后自动停车
+ * g_one_shot_angle:  T 命令目标角度 (正=左转 yaw+, 负=右转 yaw-)
+ * g_brake_start:     刹车开始的 SysTick 时间戳 (ms) */
+uint8_t g_square_state    = 0;
+uint8_t g_square_edge     = 0;
 float   g_square_yaw_base = 0.0f;
+float   g_turn_start_yaw  = 0.0f;
+uint8_t g_one_shot_turn   = 0;
+float   g_one_shot_angle  = 0.0f;
+uint32_t g_brake_start    = 0;
 
 int main(void)
 {
@@ -190,73 +200,128 @@ int main(void)
                 Track_Loop();
                 Odom_Update();   /* 巡线模式也推里程计 (过弯检测/圈数用) */
             } else if (g_mode == 3) {
-                /* ── 正方形行进 (非灰度, 纯 IMU + 编码器里程) ──
+                /* ── 正方形行进 / 单次转弯 T 命令 (非灰度, 纯 IMU + 编码器里程) ──
                  * 切 m3 时在 cmd.c 锁定起点 yaw_target + Odom_Reset
-                 * 状态机: 直线走 1500mm → 原地左转 90° → 下一条边, 走完 4 条边停车
-                 * 左转 = 逆时针 = yaw 增加 (JY61P 约定) */
-                extern uint8_t g_square_state;   /* 0=直行 1=转弯 2=完成 */
+                 * 状态机: 0=直行 1=转弯 2=完成 3=刹车(停车200ms)
+                 * 直线走 1500mm → 原地左转 90° → 刹车200ms → 下一条边, 走完4条边停车
+                 * 左转 = 逆时针(从车顶看) = yaw 增加 (JY61P 倒扣: 模块顶面朝下,
+                 *   从车顶看左转 = 从模块顶面看顺时针 = 维特标准 yaw+)
+                 * T 命令 (g_one_shot_turn=1) 优先级最高: 任意模式下执行单次转弯后停车 */
+                extern uint8_t g_square_state;   /* 0=直行 1=转弯 2=完成 3=刹车 */
                 extern uint8_t g_square_edge;
                 extern float   g_square_yaw_base;
+                extern uint8_t g_one_shot_turn;
+                extern float   g_one_shot_angle;
+                extern uint32_t g_brake_start;
                 #define SQ_EDGE_LEN    1500.0f   /* 边长 mm */
                 #define SQ_TURN_THRESH 5.0f      /* 转弯到位阈值 (度) */
-                #define SQ_BASE_SPD    200       /* 直行基础速度 */
-                #define SQ_TURN_SPD    200       /* 原地转弯速度 */
-                #define SQ_YAW_KP       30.0f    /* 直行 yaw 修正 P (驱动板单位/度) */
+                #define SQ_BASE_SPD    80        /* 直行基础速度 (慢速验证) */
+                #define SQ_TURN_SPD    60        /* 原地转弯速度 (慢, 防过冲) */
+                #define SQ_YAW_KP       15.0f    /* 直行 yaw 修正 P (驱动板单位/度) */
+                #define SQ_YAW_CLIP     40        /* 直行修正最大差速 (限幅) */
+                #define SQ_BRAKE_MS     200       /* 转弯到位后刹车时间 (ms) */
 
-                float yaw_now = IMU_Get_Yaw_Cached();
-                g_yaw_now = yaw_now;
-
-                if (g_square_state == 2) {
-                    /* 已完成 4 条边, 停车 */
+                /* IMU 离线保护: yaw 恒 0 会导致修正乱打方向, 直接停车 */
+                if (!g_imu_present) {
                     g_motor_l_speed = 0;
                     g_motor_r_speed = 0;
-                    g_running = 0;
-                    Motor_Stop();
-                    CMD_SendText("[MSPM0] SQUARE DONE! auto-stop\n");
-                } else if (g_square_state == 0) {
-                    /* 直行阶段: 走直线, 用 yaw 误差做差速保持直行 */
-                    float err = g_square_yaw_base - yaw_now;
-                    if (err > 180.0f)  err -= 360.0f;
-                    if (err < -180.0f) err += 360.0f;
-                    g_yaw_err = err;
-                    float correction = err * SQ_YAW_KP;
-                    if (correction > 150.0f)  correction = 150.0f;
-                    if (correction < -150.0f) correction = -150.0f;
-                    g_motor_l_speed = (int16_t)(SQ_BASE_SPD - correction);
-                    g_motor_r_speed = (int16_t)(SQ_BASE_SPD + correction);
-                    /* 判断是否走完一条边 */
-                    if (Odom_Get_Edge_Dist() >= SQ_EDGE_LEN) {
-                        g_square_state = 1;
-                        /* 转弯目标 = 当前朝向 + 90° (左转, 逆时针为正) */
-                        g_square_yaw_base = yaw_now + 90.0f;
-                        if (g_square_yaw_base > 180.0f) g_square_yaw_base -= 360.0f;
-                        CMD_SendText("[MSPM0] SQUARE: edge done, turning\n");
+                    if (g_running) {
+                        g_running = 0;
+                        Motor_Stop();
+                        CMD_SendText("[MSPM0] SQUARE: IMU offline, stop\n");
                     }
                 } else {
-                    /* 转弯阶段: 原地左转 (左轮反转, 右轮正转) */
-                    float err = g_square_yaw_base - yaw_now;
-                    if (err > 180.0f)  err -= 360.0f;
-                    if (err < -180.0f) err += 360.0f;
-                    g_yaw_err = err;
-                    /* 未到位: 继续转 */
-                    if (err > SQ_TURN_THRESH) {
-                        /* 目标在当前朝向左侧 (yaw 需增加), 左转 */
-                        g_motor_l_speed = -SQ_TURN_SPD;
-                        g_motor_r_speed =  SQ_TURN_SPD;
-                    } else if (err < -SQ_TURN_THRESH) {
-                        /* 过冲, 右转修正 */
-                        g_motor_l_speed =  SQ_TURN_SPD;
-                        g_motor_r_speed = -SQ_TURN_SPD;
-                    } else {
-                        /* 到位, 进下一条边 */
-                        g_square_state = 0;
-                        g_square_edge++;
-                        g_square_yaw_base = yaw_now;   /* 锁新朝向 */
-                        Odom_Reset_Edge();
-                        if (g_square_edge >= 4) {
-                            g_square_state = 2;   /* 4 条边走完 */
+                    float yaw_now = IMU_Get_Yaw_Cached();
+                    g_yaw_now = yaw_now;
+
+                    if (g_one_shot_turn) {
+                        /* ── T 命令单次转弯 (任意角度) ──
+                         * target = g_one_shot_angle (正=左转 yaw+, 负=右转 yaw-)
+                         * delta = yaw_now - g_turn_start_yaw (相对变化幅度)
+                         * err = target - delta, 正=还需左转, 负=还需右转 */
+                        float target = g_one_shot_angle;
+                        float delta = yaw_now - g_turn_start_yaw;
+                        if (delta > 180.0f)  delta -= 360.0f;
+                        if (delta < -180.0f) delta += 360.0f;
+                        float err = target - delta;
+                        g_yaw_err = err;
+                        if (err > SQ_TURN_THRESH) {
+                            g_motor_l_speed = -SQ_TURN_SPD;   /* 左转: 左轮后+右轮前 */
+                            g_motor_r_speed =  SQ_TURN_SPD;
+                        } else if (err < -SQ_TURN_THRESH) {
+                            g_motor_l_speed =  SQ_TURN_SPD;   /* 右转: 左轮前+右轮后 */
+                            g_motor_r_speed = -SQ_TURN_SPD;
+                        } else {
+                            /* 到位, 停车 (单次转弯不进直行) */
+                            g_one_shot_turn = 0;
+                            g_running = 0;
+                            Motor_Stop();
+                            CMD_SendText("[MSPM0] TURN done\n");
                         }
-                        CMD_SendText("[MSPM0] SQUARE: turn done, next edge\n");
+                    } else if (g_square_state == 2) {
+                        /* 已完成 4 条边, 停车 */
+                        g_motor_l_speed = 0;
+                        g_motor_r_speed = 0;
+                        g_running = 0;
+                        Motor_Stop();
+                        CMD_SendText("[MSPM0] SQUARE DONE! auto-stop\n");
+                    } else if (g_square_state == 3) {
+                        /* 刹车: 停车 SQ_BRAKE_MS 等惯性消除, 再进下一条边
+                         * 转弯到位后立即切直行会有转弯惯性, 第一段直行开局就偏 */
+                        g_motor_l_speed = 0;
+                        g_motor_r_speed = 0;
+                        if ((uint32_t)(g_sys_tick - g_brake_start) >= SQ_BRAKE_MS) {
+                            g_square_yaw_base = IMU_Get_Yaw_Cached();  /* 锁新朝向 */
+                            Odom_Reset_Edge();
+                            g_square_edge++;
+                            if (g_square_edge >= 4) {
+                                g_square_state = 2;   /* 4 条边走完 */
+                                CMD_SendText("[MSPM0] SQUARE: all edges done\n");
+                            } else {
+                                g_square_state = 0;   /* 进下一条边直行 */
+                                CMD_SendText("[MSPM0] SQUARE: next edge\n");
+                            }
+                        }
+                    } else if (g_square_state == 0) {
+                        /* 直行阶段: 走直线, 用 yaw 误差做差速保持直行
+                         * err = base - yaw_now, 正=yaw偏小(车头偏右), 需左转修正
+                         * (倒扣: 车右转 yaw减, err=base-yaw>0 → 左转修正 yaw+ → 回正) */
+                        float err = g_square_yaw_base - yaw_now;
+                        if (err > 180.0f)  err -= 360.0f;
+                        if (err < -180.0f) err += 360.0f;
+                        g_yaw_err = err;
+                        float correction = err * SQ_YAW_KP;
+                        if (correction > SQ_YAW_CLIP)  correction = SQ_YAW_CLIP;
+                        if (correction < -SQ_YAW_CLIP) correction = -SQ_YAW_CLIP;
+                        g_motor_l_speed = (int16_t)(SQ_BASE_SPD - correction);
+                        g_motor_r_speed = (int16_t)(SQ_BASE_SPD + correction);
+                        /* 判断是否走完一条边 */
+                        if (Odom_Get_Edge_Dist() >= SQ_EDGE_LEN) {
+                            g_square_state = 1;
+                            g_turn_start_yaw = yaw_now;   /* 记转弯起点, 用相对幅度判定 */
+                            CMD_SendText("[MSPM0] SQUARE: edge done, turning\n");
+                        }
+                    } else {
+                        /* state == 1 转弯阶段: 原地左转 90°
+                         * delta = yaw_now - turn_start_yaw, 目标 delta=90° (左转 yaw+)
+                         * err = 90 - delta, 正=还需左转, 负=过冲需右转修正 */
+                        float delta = yaw_now - g_turn_start_yaw;
+                        if (delta > 180.0f)  delta -= 360.0f;
+                        if (delta < -180.0f) delta += 360.0f;
+                        float err = 90.0f - delta;
+                        g_yaw_err = err;
+                        if (err > SQ_TURN_THRESH) {
+                            g_motor_l_speed = -SQ_TURN_SPD;   /* 左转 */
+                            g_motor_r_speed =  SQ_TURN_SPD;
+                        } else if (err < -SQ_TURN_THRESH) {
+                            g_motor_l_speed =  SQ_TURN_SPD;   /* 过冲, 右转修正 */
+                            g_motor_r_speed = -SQ_TURN_SPD;
+                        } else {
+                            /* 到位, 进刹车 (不直接切直行, 防转弯惯性带偏下一条边) */
+                            g_square_state = 3;
+                            g_brake_start = g_sys_tick;
+                            CMD_SendText("[MSPM0] SQUARE: turn done, braking\n");
+                        }
                     }
                 }
             } else {

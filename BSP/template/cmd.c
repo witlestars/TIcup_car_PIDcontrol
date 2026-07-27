@@ -13,8 +13,9 @@
  *   j0.1    驱动板 PID kd = 0.1
  *   s       急停
  *   g       恢复 (同时复位直角弯超时锁定)
- *   m0/m1/m3 巡线/空转/不倒翁(IMU yaw自稳, 切到m3时锁当前朝向, 手转车会自动回正)
+ *   m0/m1/m3 巡线/空转/正方形行进(m3: IMU+编码器走1500mm方形, 切时锁当前yaw)
  *   t200    空转目标速度
+ *   T90     转任意角度 (T90=左转90°, T-45=右转45°, 正=左转yaw+, 完成后自动停车)
  *   E0/E1   IMU 解析开关 (改串口后不再与OLED互斥): E1=启用IMU解析, E0=暂停IMU解析
  *   L3      设置目标圈数 = 3 (替代原 LAP_DN 按钮, 范围1~9)
  *   e0/e1   切换 IMU 辅助转弯
@@ -235,9 +236,11 @@ static void CMD_Exec(void)
             extern uint8_t g_square_state;
             extern uint8_t g_square_edge;
             extern float   g_square_yaw_base;
+            extern uint8_t g_one_shot_turn;
             g_square_state = 0;
             g_square_edge = 0;
             g_square_yaw_base = IMU_Get_Yaw_Cached();
+            g_one_shot_turn = 0;    /* 切 m3 时清掉单次转弯标志, 走正常方形 */
             Odom_Reset();
             g_yaw_target = g_square_yaw_base;
         } else {
@@ -248,6 +251,33 @@ static void CMD_Exec(void)
                  g_mode == 0 ? "TRACK" : g_mode == 1 ? "IDLE" : "SQUARE",
                  g_yaw_target);
         CMD_SendText(ack);
+        break;
+    case 'T':   /* 转任意角度: T90=左转90°, T-45=右转45° (正=左转 yaw+, 与m3一致)
+                 * 任意模式下发送都会切到 m3, 执行单次转弯后自动停车
+                 * 完成后 g_mode 保持 3, 用户可手动 m0/m1 切回原模式 */
+        {
+            extern uint8_t g_one_shot_turn;
+            extern float   g_one_shot_angle;
+            extern float   g_turn_start_yaw;
+            if (!g_imu_present) {
+                CMD_SendText("[MSPM0] TURN: IMU offline, refused\n");
+                break;
+            }
+            if (v < -360.0f || v > 360.0f) {
+                snprintf(ack, sizeof(ack),
+                    "[MSPM0] TURN: invalid angle %.1f (must -360~360)\n", v);
+                CMD_SendText(ack);
+                break;
+            }
+            g_one_shot_turn  = 1;
+            g_one_shot_angle = v;
+            g_turn_start_yaw = IMU_Get_Yaw_Cached();
+            g_mode = 3;        /* 切到 m3 让主循环执行转弯 */
+            g_running = 1;     /* 自动启动 */
+            snprintf(ack, sizeof(ack),
+                "[MSPM0] TURN: target=%.1f deg (positive=left), mode=3, running\n", v);
+            CMD_SendText(ack);
+        }
         break;
     case 't':
         g_target_rpm = v;
@@ -288,11 +318,22 @@ static void CMD_Exec(void)
             }
         }
         break;
-    case 'y':   /* 查询 yaw + 转弯状态 */
-        snprintf(ack, sizeof(ack),
-            "[MSPM0] yaw=%.2f target=%.2f err=%.2f done_by=%d assist=%d\n",
-            g_yaw_now, g_yaw_target, g_yaw_err, g_corner_done_by, g_imu_assist);
-        CMD_SendText(ack);
+    case 'y':   /* 查询 yaw + 转弯状态 + m3 状态机 */
+        {
+            extern uint8_t g_square_state;
+            extern uint8_t g_square_edge;
+            extern uint8_t g_one_shot_turn;
+            extern float   g_one_shot_angle;
+            extern float   g_turn_start_yaw;
+            extern float   g_yaw_now;
+            snprintf(ack, sizeof(ack),
+                "[MSPM0] yaw=%.2f target=%.2f err=%.2f assist=%d\n"
+                "       m3: state=%d edge=%d turn_start=%.2f | one_shot=%d angle=%.1f\n",
+                g_yaw_now, g_yaw_target, g_yaw_err, g_imu_assist,
+                g_square_state, g_square_edge, g_turn_start_yaw,
+                g_one_shot_turn, g_one_shot_angle);
+            CMD_SendText(ack);
+        }
         break;
     case 'x':   /* 查询位置 */
         snprintf(ack, sizeof(ack),
