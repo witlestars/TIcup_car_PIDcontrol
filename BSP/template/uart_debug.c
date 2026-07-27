@@ -50,15 +50,16 @@ void UART_Debug_Send(float *data, uint8_t count)
  */
 void UART_Debug_EnableRxIRQ(void)
 {
-    /* 清可能残留的错误标志, 防止中断立即触发 */
-    DL_UART_clearInterruptStatus(UART_DEBUG_INST,
-        DL_UART_INTERRUPT_OVERRUN_ERROR |
-        DL_UART_INTERRUPT_RX_TIMEOUT_ERROR |
-        DL_UART_INTERRUPT_RX);
+    /* 清 NVIC pending, 防止残留触发 */
+    NVIC_ClearPendingIRQ(UART_DEBUG_INST_INT_IRQN);
 
-    /* 启用 RX 中断 (FIFO 非空即触发, MSPM0 UART 默认 1/8 满=4字节阈值时触发,
-     * 这里用 DL_UART_INTERRUPT_RX 即接收中断, 任何字节到来都会进 ISR) */
-    DL_UART_enableInterrupt(UART_DEBUG_INST, DL_UART_INTERRUPT_RX);
+    /* 启用 RX 中断 + Overrun 错误中断
+     * 用 DL_UART_Main_* 系列 API (MSPM0G3507 的 UART 是 Main 类型)
+     * DL_UART_MAIN_INTERRUPT_RX: RX FIFO 达到阈值时触发 (默认 1/8 满 = 4 字节)
+     *   注: 9600bps 每字节 ~1ms, JY61P 10Hz 每帧 11 字节, 4 字节阈值足够及时
+     * DL_UART_MAIN_INTERRUPT_OVERRUN_ERROR: FIFO 溢出时触发, ISR 里清掉防卡死 */
+    DL_UART_Main_enableInterrupt(UART_DEBUG_INST,
+        DL_UART_MAIN_INTERRUPT_RX | DL_UART_MAIN_INTERRUPT_OVERRUN_ERROR);
 
     /* 在 NVIC 里启用 UART0 中断 */
     NVIC_EnableIRQ(UART_DEBUG_INST_INT_IRQN);
@@ -66,47 +67,56 @@ void UART_Debug_EnableRxIRQ(void)
 
 /**
  * @brief UART0 RX 中断服务程序
- *        把 RX FIFO 里所有字节搬到环形缓冲区
- *        同时清 overrun/timeout 错误, 防止 RX 卡死
+ *        用 DL_UART_Main_getPendingInterrupt 自动清 pending 标志 (关键!)
+ *        处理两种中断: RX (读 FIFO 字节) + OVERRUN (清错误, 读走 FIFO 防卡死)
  *        echo 开启时: 非阻塞发 hex 到蓝牙串口 (TX FIFO 满就跳过该字节, 不等待)
+ *
+ * @note 之前用 DL_UART_clearInterruptStatus 没真正清 RX pending,
+ *        导致 ISR 反复进但 FIFO 空, while 不执行, 新字节不处理, yaw 卡在 0
  */
 void UART0_IRQHandler(void)
 {
-    /* 先清错误标志 (overrun/timeout), 否则会反复进中断 */
-    DL_UART_clearInterruptStatus(UART_DEBUG_INST,
-        DL_UART_INTERRUPT_OVERRUN_ERROR |
-        DL_UART_INTERRUPT_RX_TIMEOUT_ERROR);
+    /* getPendingInterrupt 返回当前 pending 的中断类型, 同时自动清除该标志
+     * (这是 MSPM0 driverlib 的标准用法, 比手动 clearInterruptStatus 可靠) */
+    uint32_t irq = DL_UART_Main_getPendingInterrupt(UART_DEBUG_INST);
 
-    /* 把 RX FIFO 里所有字节搬到环形缓冲区 */
-    while (!DL_UART_Main_isRXFIFOEmpty(UART_DEBUG_INST)) {
-        uint8_t b = (uint8_t)DL_UART_Main_receiveData(UART_DEBUG_INST);
-        uint8_t next = (uint8_t)(s_rx_head + 1);
-        if (next != s_rx_tail) {   /* 缓冲区未满 */
-            s_rx_buf[s_rx_head] = b;
-            s_rx_head = next;
-        }
-        /* 原始字节回显: hex 发到蓝牙串口 (非阻塞, TX 满就跳过, 不影响 ISR 时序) */
-        if (g_uart_debug_echo) {
-            const char h[] = "0123456789ABCDEF";
-            char hex[3];
-            uint8_t i;
-            hex[0] = h[(b >> 4) & 0x0F];
-            hex[1] = h[b & 0x0F];
-            hex[2] = ' ';
-            for (i = 0; i < 3; i++) {
-                if (!DL_UART_Main_isTXFIFOFull(UART_BLUETOOTH_INST)) {
-                    DL_UART_Main_transmitDataBlocking(UART_BLUETOOTH_INST, (uint8_t)hex[i]);
+    switch (irq) {
+    case DL_UART_MAIN_IIDX_RX:
+        /* RX 中断: FIFO 有数据, 全部搬到环形缓冲 */
+        while (!DL_UART_Main_isRXFIFOEmpty(UART_DEBUG_INST)) {
+            uint8_t b = (uint8_t)DL_UART_Main_receiveData(UART_DEBUG_INST);
+            uint8_t next = (uint8_t)(s_rx_head + 1);
+            if (next != s_rx_tail) {   /* 缓冲区未满 */
+                s_rx_buf[s_rx_head] = b;
+                s_rx_head = next;
+            }
+            /* 原始字节回显: hex 发到蓝牙串口 (非阻塞, TX 满就跳过, 不影响 ISR 时序) */
+            if (g_uart_debug_echo) {
+                const char h[] = "0123456789ABCDEF";
+                char hex[3];
+                uint8_t i;
+                hex[0] = h[(b >> 4) & 0x0F];
+                hex[1] = h[b & 0x0F];
+                hex[2] = ' ';
+                for (i = 0; i < 3; i++) {
+                    if (!DL_UART_Main_isTXFIFOFull(UART_BLUETOOTH_INST)) {
+                        DL_UART_Main_transmitDataBlocking(UART_BLUETOOTH_INST, (uint8_t)hex[i]);
+                    }
                 }
-                /* TX FIFO 满: 直接跳过该字符, 不等待 (避免 ISR 阻塞导致丢 RX 字节) */
             }
         }
-        /* 满则丢弃 (理论上不会发生, 256 字节 / 110字节每秒 远大于消费速度) */
-    }
-    /* echo 开启时: 加换行分隔, 方便阅读 (同样非阻塞) */
-    if (g_uart_debug_echo) {
-        if (!DL_UART_Main_isTXFIFOFull(UART_BLUETOOTH_INST)) {
-            DL_UART_Main_transmitDataBlocking(UART_BLUETOOTH_INST, '\n');
+        break;
+
+    case DL_UART_MAIN_IIDX_OVERRUN_ERROR:
+        /* Overrun: FIFO 溢出 (ISR 太慢没及时读), 读走所有字节丢弃, 防止卡死 */
+        while (!DL_UART_Main_isRXFIFOEmpty(UART_DEBUG_INST)) {
+            (void)DL_UART_Main_receiveData(UART_DEBUG_INST);
         }
+        break;
+
+    default:
+        /* 其他中断 (TX 等), 忽略 */
+        break;
     }
 }
 
