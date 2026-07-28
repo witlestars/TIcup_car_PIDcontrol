@@ -8,13 +8,15 @@
 #define __IMU_H
 #include <stdint.h>
 
-extern uint8_t g_imu_present;   /* 1=收到过有效帧 */
-extern uint8_t g_use_imu;       /* 1=解析启用(默认) 0=暂停 */
-
-/* 0x53 角度(度) / 0x52 角速度(°/s) / 0x51 加速度(g) 缓存 */
-extern float g_imu_roll, g_imu_pitch, g_imu_yaw;
-extern float g_imu_gyrox, g_imu_gyroy, g_imu_gyroz;
-extern float g_imu_accx, g_imu_accy, g_imu_accz;
+/* IMU 缓存数据 (解析后自动更新) */
+typedef struct {
+    float roll, pitch, yaw;       /* 0x53 角度 (度) */
+    float gyrox, gyroy, gyroz;   /* 0x52 角速度 (°/s) */
+    float accx, accy, accz;       /* 0x51 加速度 (g) */
+    uint8_t present;              /* 1=收到过有效帧 */
+    uint8_t use_imu;              /* 1=解析启用(默认) 0=暂停 */
+} imu_state_t;
+extern imu_state_t g_imu;
 
 void     IMU_EnableRxIRQ(void);                          /* 启用 RX 中断 (init 后调一次) */
 void     IMU_EchoTick(void);                              /* 主循环调: echo 诊断 (非阻塞) */

@@ -20,8 +20,7 @@
 #include "delay.h"
 
 /* ────────────── 全局目标速度 ────────────── */
-int16_t g_motor_l_speed = 0;
-int16_t g_motor_r_speed = 0;
+motor_target_t g_motor = {0};
 
 /* ────────────── 对外 API ────────────── */
 
@@ -40,8 +39,8 @@ void Motor_Send_Speed(int16_t m1, int16_t m2, int16_t m3, int16_t m4)
 void Motor_Stop(void)
 {
     control_speed(0, 0, 0, 0);
-    g_motor_l_speed = 0;
-    g_motor_r_speed = 0;
+    g_motor.l = 0;
+    g_motor.r = 0;
 }
 
 /**

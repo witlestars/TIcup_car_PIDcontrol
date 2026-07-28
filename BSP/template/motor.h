@@ -37,9 +37,12 @@
 #define MOTOR_SPEED_MAX      1000
 #define MOTOR_SPEED_MIN     -1000
 
-/* ────────────── 全局目标速度 (由 track.c 写入) ────────────── */
-extern int16_t g_motor_l_speed;
-extern int16_t g_motor_r_speed;
+/* ────────────── 全局目标速度 (track/cmd 写入, main 读出发驱动板) ────────────── */
+typedef struct {
+    int16_t l;   /* 左轮目标速度 */
+    int16_t r;   /* 右轮目标速度 */
+} motor_target_t;
+extern motor_target_t g_motor;
 
 /* ────────────── API ────────────── */
 

@@ -14,8 +14,6 @@
 #include "odometry.h"
 #include "track.h"
 
-extern volatile uint32_t g_sys_tick;
-
 /* 按钮标志位 (ISR 设, HandleEvents 清) */
 #define BTN_BIT_START   0x01
 #define BTN_BIT_LAP_UP  0x02
@@ -103,12 +101,12 @@ void Button_HandleEvents(void)
     }
 
     if (flag & BTN_BIT_MODE) {
-        switch_mode(!g_use_imu);
+        switch_mode(!g_imu.use_imu);
     }
 
     if (flag & BTN_BIT_RESET) {
         g_running = 0; Motor_Stop();
-        if (g_imu_present) IMU_Calibrate_Z();
+        if (g_imu.present) IMU_Calibrate_Z();
         Odom_Reset();
         g_current_lap = 0; g_corner_count = 0; g_laps_done = 0;
         CMD_SendText("[MSPM0] BTN RESET\n");

@@ -24,6 +24,9 @@ extern float   g_target_rpm; /* 空转目标 RPM */
 extern uint8_t g_running;    /* 1=运行, 0=停止 (上电默认0, 发'g'启动, 's'停止) */
 extern uint8_t g_imu_uart_echo; /* 1=IMU 串口原始字节回显到 PC */
 
+/* 1ms 时基 (定义在 main.c, button.c/cmd.c 共用) */
+extern volatile uint32_t g_sys_tick;
+
 void CMD_Init(void);
 void CMD_Poll(void);
 void CMD_SendText(const char *text);
@@ -36,14 +39,17 @@ void CMD_SendText(const char *text);
 void switch_mode(uint8_t use_imu);
 
 /* ─── m3 正方形行进 / T 命令 状态机 (实现合并自原 square.c) ───
- * 状态机: 0=直行 1=转弯 2=完成 3=刹车(停车200ms消惯性)
- * 左转=yaw+, T命令(g_one_shot_turn=1)优先级最高 */
-extern uint8_t g_square_state;      /* 0=直行 1=转弯 2=完成 3=刹车 */
-extern uint8_t g_square_edge;       /* 已完成边数 (0~4) */
-extern uint8_t g_one_shot_turn;     /* T 命令单次转弯标志 */
-extern float   g_square_yaw_base;   /* 当前边直行目标朝向 */
-extern float   g_turn_start_yaw;    /* 当前转弯起点 yaw */
-extern float   g_one_shot_angle;    /* T 命令目标角度 */
+ * 状态机: state 0=直行 1=转弯 2=完成 3=刹车(停车200ms消惯性)
+ * 左转=yaw+, T命令(one_shot=1)优先级最高 */
+typedef struct {
+    uint8_t state;          /* 0=直行 1=转弯 2=完成 3=刹车 */
+    uint8_t edge;           /* 已完成边数 (0~4) */
+    float   yaw_base;       /* 当前边直行目标朝向 */
+    float   turn_start_yaw; /* 当前转弯起点 yaw */
+    uint8_t one_shot;       /* T 命令单次转弯标志 */
+    float   one_shot_angle; /* T 命令目标角度 */
+} square_t;
+extern square_t g_square;
 
 /** 切 m3 时调用: 锁当前 yaw, 复位状态机和里程计 */
 void Square_Init(void);
@@ -52,7 +58,7 @@ void Square_Init(void);
  *  会切到 m3 模式并自动启动, IMU 离线或角度超 ±360° 拒绝 */
 void Square_Turn(float angle);
 
-/** m3 模式主循环 10ms 调用: 执行状态机, 设置 g_motor_l/r_speed
+/** m3 模式主循环 10ms 调用: 执行状态机, 设置 g_motor.l/r
  *  内含 IMU 离线保护, T 命令优先级最高 */
 void Square_Loop(void);
 

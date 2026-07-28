@@ -26,6 +26,7 @@ const TIMER1   = TIMER.addInstance();
 const UART     = scripting.addModule("/ti/driverlib/UART", {}, false);
 const UART1    = UART.addInstance();
 const UART2    = UART.addInstance();
+const UART3    = UART.addInstance();
 
 /**
  * Write custom configuration values to the imported modules.
@@ -209,6 +210,27 @@ UART2.rxPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
 UART2.rxPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric7";
 UART2.rxPinConfig.enableConfig         = true;
 
+/* UART_LORA: 大夏龙雀 DX-LR22-433T22D LoRa 模块, 9600bps 8N1 透明传输
+ * 引脚: PB15=TX, PB16=RX (硬件 UART2 外设, PINCM32/PINCM33) */
+UART3.$name                            = "UART_LORA";
+UART3.targetBaudRate                   = 9600;
+UART3.enableFIFO                       = true;
+UART3.txFifoThreshold                  = "DL_UART_TX_FIFO_LEVEL_1_4_EMPTY";
+UART3.enabledInterrupts                = ["RX"];
+UART3.peripheral.rxPin.$assign         = "PB16";
+UART3.peripheral.txPin.$assign         = "PB15";
+UART3.txPinConfig.direction            = scripting.forceWrite("OUTPUT");
+UART3.txPinConfig.hideOutputInversion  = scripting.forceWrite(false);
+UART3.txPinConfig.onlyInternalResistor = scripting.forceWrite(false);
+UART3.txPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+UART3.txPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric8";
+UART3.txPinConfig.enableConfig         = true;
+UART3.rxPinConfig.hideOutputInversion  = scripting.forceWrite(false);
+UART3.rxPinConfig.onlyInternalResistor = scripting.forceWrite(false);
+UART3.rxPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+UART3.rxPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric9";
+UART3.rxPinConfig.enableConfig         = true;
+
 /**
  * Pinmux solution for unlocked pins/peripherals. This ensures that minor changes to the automatic solver in a future
  * version of the tool will not impact the pinmux you originally saw.  These lines can be completely deleted in order to
@@ -222,3 +244,4 @@ Board.peripheral.swdioPin.$suggestSolution   = "PA19";
 TIMER1.peripheral.$suggestSolution           = "TIMA0";
 UART1.peripheral.$suggestSolution            = "UART0";
 UART2.peripheral.$suggestSolution            = "UART1";
+UART3.peripheral.$suggestSolution            = "UART2";

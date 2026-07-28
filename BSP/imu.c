@@ -17,12 +17,7 @@
 extern uint8_t g_imu_uart_echo;
 
 /* ─── 缓存数据 (解析后自动更新) ─── */
-float g_imu_roll = 0.0f, g_imu_pitch = 0.0f, g_imu_yaw = 0.0f;
-float g_imu_gyrox = 0.0f, g_imu_gyroy = 0.0f, g_imu_gyroz = 0.0f;
-float g_imu_accx = 0.0f, g_imu_accy = 0.0f, g_imu_accz = 0.0f;
-
-uint8_t g_imu_present = 0;
-uint8_t g_use_imu = 1;
+imu_state_t g_imu = { .present = 0, .use_imu = 1 };
 
 /* ─── RX 环形缓冲 (ISR 生产, IMU_Poll 消费) ─── */
 #define RX_BUF_SIZE 256
@@ -133,18 +128,18 @@ static void imu_parse_byte(uint8_t b)
             int16_t r1 = (int16_t)(((uint16_t)s_data_buf[3] << 8) | s_data_buf[2]);
             int16_t r2 = (int16_t)(((uint16_t)s_data_buf[5] << 8) | s_data_buf[4]);
             if (s_frame_type == 0x53) {
-                g_imu_roll  = (float)r0 / 32768.0f * 180.0f;
-                g_imu_pitch = (float)r1 / 32768.0f * 180.0f;
-                g_imu_yaw   = (float)r2 / 32768.0f * 180.0f;
-                g_imu_present = 1;
+                g_imu.roll  = (float)r0 / 32768.0f * 180.0f;
+                g_imu.pitch = (float)r1 / 32768.0f * 180.0f;
+                g_imu.yaw   = (float)r2 / 32768.0f * 180.0f;
+                g_imu.present = 1;
             } else if (s_frame_type == 0x52) {
-                g_imu_gyrox = (float)r0 / 32768.0f * 2000.0f;
-                g_imu_gyroy = (float)r1 / 32768.0f * 2000.0f;
-                g_imu_gyroz = (float)r2 / 32768.0f * 2000.0f;
+                g_imu.gyrox = (float)r0 / 32768.0f * 2000.0f;
+                g_imu.gyroy = (float)r1 / 32768.0f * 2000.0f;
+                g_imu.gyroz = (float)r2 / 32768.0f * 2000.0f;
             } else if (s_frame_type == 0x51) {
-                g_imu_accx = (float)r0 / 32768.0f * 16.0f;
-                g_imu_accy = (float)r1 / 32768.0f * 16.0f;
-                g_imu_accz = (float)r2 / 32768.0f * 16.0f;
+                g_imu.accx = (float)r0 / 32768.0f * 16.0f;
+                g_imu.accy = (float)r1 / 32768.0f * 16.0f;
+                g_imu.accz = (float)r2 / 32768.0f * 16.0f;
             }
         }
         s_state = PS_FIND_55;
@@ -160,8 +155,8 @@ static void imu_parse_byte(uint8_t b)
 /* 等 1000ms 看是否收到 JY61P 帧, 返回0=成功 */
 uint8_t IMU_Init(void)
 {
-    if (!g_use_imu) { g_imu_present = 0; return 0xFF; }
-    s_state = PS_FIND_55; s_data_idx = 0; g_imu_present = 0;
+    if (!g_imu.use_imu) { g_imu.present = 0; return 0xFF; }
+    s_state = PS_FIND_55; s_data_idx = 0; g_imu.present = 0;
     while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
         (void)DL_UART_Main_receiveData(UART_IMU_INST);
     }
@@ -169,20 +164,20 @@ uint8_t IMU_Init(void)
         delay_ms(5);
         uint8_t b;
         while (imu_get_byte(&b)) imu_parse_byte(b);
-        if (g_imu_present) return 0;
+        if (g_imu.present) return 0;
     }
     return 0x01;
 }
 
 uint8_t IMU_Read_RPY(float *roll, float *pitch, float *yaw)
 {
-    if (roll)  *roll  = g_imu_roll;
-    if (pitch) *pitch = g_imu_pitch;
-    if (yaw)   *yaw   = g_imu_yaw;
-    return (g_imu_present && g_use_imu) ? 0 : 1;
+    if (roll)  *roll  = g_imu.roll;
+    if (pitch) *pitch = g_imu.pitch;
+    if (yaw)   *yaw   = g_imu.yaw;
+    return (g_imu.present && g_imu.use_imu) ? 0 : 1;
 }
 
-float IMU_Read_Yaw(void) { return g_imu_yaw; }
+float IMU_Read_Yaw(void) { return g_imu.yaw; }
 
 /* Z轴归零: 解锁→归零→保存 (内部 600ms delay, 不要在 ISR 内调) */
 uint8_t IMU_Calibrate_Z(void)
@@ -193,16 +188,16 @@ uint8_t IMU_Calibrate_Z(void)
     IMU_SendBytes(unlock, 5); delay_ms(200);
     IMU_SendBytes(calib, 5); delay_ms(200);
     IMU_SendBytes(save,  5); delay_ms(200);
-    g_imu_yaw = 0.0f;
+    g_imu.yaw = 0.0f;
     return 0;
 }
 
 /* 主循环每轮调用: 从环形缓冲取字节解析帧, 降低 yaw 延迟避免车乱跑 */
 void IMU_Poll(void)
 {
-    if (!g_use_imu) return;
+    if (!g_imu.use_imu) return;
     uint8_t b, budget = 32;
     while (budget-- && imu_get_byte(&b)) imu_parse_byte(b);
 }
 
-float IMU_Get_Yaw_Cached(void) { return g_imu_yaw; }
+float IMU_Get_Yaw_Cached(void) { return g_imu.yaw; }

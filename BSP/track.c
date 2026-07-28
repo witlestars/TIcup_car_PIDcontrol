@@ -29,22 +29,19 @@
 #include "odometry.h"
 
 /* ─── 运行时调参变量 — 可通过 UART 命令修改 ─── */
-float g_base_speed   = 200;      /* 基础速度 (驱动板单位, 200≈慢速巡线) */
-float g_turn_p       = 20.0f;    /* 离心 P: 转向强度 (加大压震荡) */
-float g_turn_d       = 4.0f;     /* 离心 D: 压低防反打 (加大压震荡) */
-float g_pivot_speed  = 100.0f;   /* 原地转弯速度 (慢转防过头) */
-float g_corner_fwd_ms = 500.0f;  /* 直角弯前冲时间 (ms, 固定500) */
+track_cfg_t g_track_cfg = {
+    200,      /* base_speed 基础速度 (驱动板单位, 200≈慢速巡线) */
+    20.0f,    /* turn_p 离心 P: 转向强度 (加大压震荡) */
+    4.0f,     /* turn_d 离心 D: 压低防反打 (加大压震荡) */
+    100.0f,   /* pivot_speed 原地转弯速度 (慢转防过头) */
+    500.0f,   /* corner_fwd_ms 直角弯前冲时间 (ms, 固定500) */
+};
 
 /* ─── 超时锁定标志 (1=原地转弯超时停车, 需 'g' 复位) ─── */
 uint8_t g_track_locked = 0;
 
 /* ─── 调试变量 (每帧更新, 供 cmd.c 发送) ─── */
-float   g_dbg_centroid  = 0.0f;   /* 当前重心 -3.5~+3.5 */
-uint8_t g_dbg_active_cnt = 0;     /* 激活传感器数量 0-8 */
-uint8_t g_dbg_active_bits = 0;    /* 激活传感器位图 (bit0=CH0 ... bit7=CH7) */
-uint8_t g_dbg_track_state = 0;    /* 状态机 0=NORMAL 1=CORNER_FWD 2=CORNER_TURN */
-int16_t g_dbg_corner_dir = 0;     /* 转弯方向 +1=右 -1=左 */
-float   g_dbg_turn = 0.0f;        /* PD输出 */
+track_dbg_t g_dbg = {0};
 
 /* ─── IMU 辅助转弯参数 (可调) ─── */
 uint8_t g_imu_assist      = 1;     /* 1=启用IMU闭环转弯, 0=纯灰度 */
@@ -75,7 +72,7 @@ float g_speed_kd  = 0;
 
 /* ─── 状态机 ───
  * 时间用"周期计数"度量, 主循环每 10ms 调用一次 Track_Loop()
- * 1 tick = 10ms, 所以 g_corner_fwd_ms 和 TRACK_PIVOT_TIMEOUT 都换算成 tick */
+ * 1 tick = 10ms, 所以 g_track_cfg.corner_fwd_ms 和 TRACK_PIVOT_TIMEOUT 都换算成 tick */
 #define TICK_MS  10
 
 enum {
@@ -120,7 +117,7 @@ static void enter_corner(int8_t dir)
     track_state = ST_CORNER_FWD;
     corner_dir  = dir;
     corner_tick = 0;
-    g_dbg_corner_dir = dir;
+    g_dbg.corner_dir = dir;
     g_corner_done_by = 0;
 
     /* 记录转弯目标yaw (在前冲阶段就预存, 前冲时yaw基本不变)
@@ -140,9 +137,9 @@ static void enter_corner(int8_t dir)
     while (g_yaw_target < -180.0f) g_yaw_target += 360.0f;
 
     /* 前冲: 两轮同向, 用基础速度 */
-    int16_t spd = (int16_t)g_base_speed;
-    g_motor_l_speed = spd;
-    g_motor_r_speed = spd;
+    int16_t spd = (int16_t)g_track_cfg.base_speed;
+    g_motor.l = spd;
+    g_motor.r = spd;
 }
 
 /**
@@ -159,9 +156,9 @@ void Track_Loop(void)
 
     /* ─── 0. 锁定状态: 超时停车后等 'g' 复位 ─── */
     if (g_track_locked) {
-        g_motor_l_speed = 0;
-        g_motor_r_speed = 0;
-        g_dbg_track_state = 3;   /* 3=LOCKED */
+        g_motor.l = 0;
+        g_motor.r = 0;
+        g_dbg.state = 3;   /* 3=LOCKED */
         return;
     }
 
@@ -177,8 +174,8 @@ void Track_Loop(void)
             active_bits |= (1 << i);
         }
     }
-    g_dbg_active_cnt  = active_cnt;
-    g_dbg_active_bits = active_bits;
+    g_dbg.active_cnt  = active_cnt;
+    g_dbg.active_bits = active_bits;
 
     /* ════════════════════════════════════════════════
      * 状态机分发
@@ -187,7 +184,7 @@ void Track_Loop(void)
     /* ─── 状态2: CORNER_TURN — 停车原地转, yaw闭环+灰度双保险 ─── */
     if (track_state == ST_CORNER_TURN) {
         corner_tick++;
-        g_dbg_track_state = 2;
+        g_dbg.state = 2;
 
         /* 读当前yaw, 计算误差 (处理±180跨越) */
         g_yaw_now = IMU_Get_Yaw_Cached();
@@ -237,8 +234,8 @@ void Track_Loop(void)
         }
         /* 退出条件3: 超时锁定停车 (TRACK_PIVOT_TIMEOUT=0 表示不限时) */
         else if (TRACK_PIVOT_TIMEOUT && corner_tick >= TRACK_PIVOT_TIMEOUT) {
-            g_motor_l_speed = 0;
-            g_motor_r_speed = 0;
+            g_motor.l = 0;
+            g_motor.r = 0;
             track_state     = ST_NORMAL;
             corner_dir      = 0;
             g_track_locked  = 1;
@@ -247,7 +244,7 @@ void Track_Loop(void)
         }
         /* 继续原地转, yaw闭环控制速度 */
         else {
-            int16_t spd = (int16_t)g_pivot_speed;
+            int16_t spd = (int16_t)g_track_cfg.pivot_speed;
             /* IMU辅助: 接近目标时减速, 避免过冲 */
             if (g_imu_assist) {
                 float abs_err = (g_yaw_err >= 0) ? g_yaw_err : -g_yaw_err;
@@ -259,11 +256,11 @@ void Track_Loop(void)
                 }
             }
             if (corner_dir > 0) {        /* 右转: 左轮正, 右轮负 */
-                g_motor_l_speed =  spd;
-                g_motor_r_speed = -spd;
+                g_motor.l =  spd;
+                g_motor.r = -spd;
             } else {                     /* 左转: 左轮负, 右轮正 */
-                g_motor_l_speed = -spd;
-                g_motor_r_speed =  spd;
+                g_motor.l = -spd;
+                g_motor.r =  spd;
             }
             return;
         }
@@ -272,28 +269,28 @@ void Track_Loop(void)
     /* ─── 状态1: CORNER_FWD — 前冲固定0.5s, 到了切到 CORNER_TURN ─── */
     if (track_state == ST_CORNER_FWD) {
         corner_tick++;
-        g_dbg_track_state = 1;
-        /* 前冲 tick 数 = g_corner_fwd_ms / TICK_MS (固定500ms) */
-        uint32_t fwd_ticks = (uint32_t)(g_corner_fwd_ms / TICK_MS);
+        g_dbg.state = 1;
+        /* 前冲 tick 数 = g_track_cfg.corner_fwd_ms / TICK_MS (固定500ms) */
+        uint32_t fwd_ticks = (uint32_t)(g_track_cfg.corner_fwd_ms / TICK_MS);
         if (fwd_ticks < 1) fwd_ticks = 1;
         if (corner_tick >= fwd_ticks) {
             /* 前冲结束, 进入原地转弯 */
             track_state  = ST_CORNER_TURN;
             corner_tick  = 0;
             /* 停一下再转 (避免惯性冲突) */
-            g_motor_l_speed = 0;
-            g_motor_r_speed = 0;
+            g_motor.l = 0;
+            g_motor.r = 0;
             return;
         }
         /* 前冲中: 保持直行速度 */
-        int16_t spd = (int16_t)g_base_speed;
-        g_motor_l_speed = spd;
-        g_motor_r_speed = spd;
+        int16_t spd = (int16_t)g_track_cfg.base_speed;
+        g_motor.l = spd;
+        g_motor.r = spd;
         return;
     }
 
     /* ─── 状态0: NORMAL — 灰度离心PD巡线 + 直角弯检测 ─── */
-    g_dbg_track_state = 0;
+    g_dbg.state = 0;
     if (grey_state.valid) {
         centroid = grey_state.centroid;
 
@@ -335,11 +332,11 @@ void Track_Loop(void)
     centroid_d = centroid - last_centroid;
     last_centroid = centroid;
 
-    turn = centroid * g_turn_p + centroid_d * g_turn_d;
+    turn = centroid * g_track_cfg.turn_p + centroid_d * g_track_cfg.turn_d;
 
     /* 更新调试变量 */
-    g_dbg_centroid = centroid;
-    g_dbg_turn     = turn;
+    g_dbg.centroid = centroid;
+    g_dbg.turn     = turn;
 
     /* 小偏差死区补偿 */
     if (centroid >  0.3f && turn < 3.0f) turn = 3.0f;
@@ -347,7 +344,7 @@ void Track_Loop(void)
 
     /* 速度目标 + 限幅 */
     {
-        float base = (lost_cnt > 0) ? 100.0f : g_base_speed;
+        float base = (lost_cnt > 0) ? 100.0f : g_track_cfg.base_speed;
         float spd_l = base + turn;    /* 线偏右 → 左轮快 → 右转找线 */
         float spd_r = base - turn;
 
@@ -356,7 +353,7 @@ void Track_Loop(void)
         if ( spd_r > SPEED_MAX) spd_r = SPEED_MAX;
         if ( spd_r < SPEED_MIN) spd_r = SPEED_MIN;
 
-        g_motor_l_speed = (int16_t)spd_l;
-        g_motor_r_speed = (int16_t)spd_r;
+        g_motor.l = (int16_t)spd_l;
+        g_motor.r = (int16_t)spd_r;
     }
 }

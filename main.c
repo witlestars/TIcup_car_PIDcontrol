@@ -11,6 +11,7 @@
 #include "BSP/template/cmd.h"
 #include "BSP/template/uart_bluetooth.h"
 #include "BSP/imu.h"
+#include "BSP/lora.h"
 #include "BSP/odometry.h"
 #include "BSP/oled.h"
 #include "BSP/button.h"
@@ -23,7 +24,7 @@ void SysTick_Handler(void) { g_sys_tick++; }
 /* IMU 解析启用/暂停切换 (按钮和 'E' 命令共用; IMU已改串口, 与OLED不互斥) */
 void switch_mode(uint8_t use_imu)
 {
-    g_use_imu = use_imu;
+    g_imu.use_imu = use_imu;
     CMD_SendText(use_imu ? "[MSPM0] IMU enabled (parsing on)\n"
                          : "[MSPM0] IMU paused (parsing off)\n");
 }
@@ -33,7 +34,7 @@ void switch_mode(uint8_t use_imu)
 static void Mode_RunStep(void)
 {
     if (!g_running) {
-        g_motor_l_speed = 0; g_motor_r_speed = 0;
+        g_motor.l = 0; g_motor.r = 0;
         return;
     }
     switch (g_mode) {
@@ -45,8 +46,8 @@ static void Mode_RunStep(void)
         Square_Loop();
         break;
     default:   /* mode 1 空转 */
-        g_motor_l_speed = (int16_t)g_target_rpm;
-        g_motor_r_speed = (int16_t)g_target_rpm;
+        g_motor.l = (int16_t)g_target_rpm;
+        g_motor.r = (int16_t)g_target_rpm;
         break;
     }
 }
@@ -66,6 +67,12 @@ int main(void)
     CMD_SendText("[MSPM0] init: imu\n");
     CMD_SendText(IMU_Init() == 0 ? "[MSPM0] IMU JY61P OK\n" : "[MSPM0] IMU JY61P FAIL\n");
 
+    /* LoRa: UART_LORA 9600bps 透明传输, 等500ms冷启动, 启用RX中断 */
+    delay_ms(500);
+    LORA_Init();
+    LORA_EnableRxIRQ();
+    CMD_SendText("[MSPM0] init: lora\n");
+
     CMD_SendText("[MSPM0] init: odom\n");   Odom_Init();
     CMD_SendText("[MSPM0] init: oled\n");   OLED_Init();
     if (g_oled_present) {
@@ -81,7 +88,8 @@ int main(void)
     while (1) {
         CMD_Poll();
         IMU_EchoTick();
-        if (g_use_imu) IMU_Poll();   /* 每轮解析降低 yaw 延迟 */
+        LORA_Poll();
+        if (g_imu.use_imu) IMU_Poll();   /* 每轮解析降低 yaw 延迟 */
 
         /* 10ms 节拍: 按钮 + 模式分发 + 电机指令 */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10) {
@@ -95,7 +103,7 @@ int main(void)
             }
 
             Mode_RunStep();          /* 按当前模式驱动电机 */
-            Motor_Send_Speed(0, -g_motor_r_speed, 0, -g_motor_l_speed);
+            Motor_Send_Speed(0, -g_motor.r, 0, -g_motor.l);
         }
     }
 }

@@ -54,16 +54,11 @@ static float drv_kp = 0.8f;
 static float drv_ki = 0.06f;
 static float drv_kd = 0.5f;
 
-/* ─── m3 正方形行进 / T 命令 状态机全局变量 ───
- * 状态机: 0=直行 1=转弯 2=完成 3=刹车(停车200ms消惯性)
+/* ─── m3 正方形行进 / T 命令 状态机 ───
+ * 状态机: state 0=直行 1=转弯 2=完成 3=刹车(停车200ms消惯性)
  * 左转=yaw+ (JY61P倒扣: 从车顶看左转=模块顶面顺时针=维特yaw+)
- * T命令(g_one_shot_turn=1)优先级最高: 单次转弯后停车 */
-uint8_t g_square_state    = 0;     /* 0=直行 1=转弯 2=完成 3=刹车 */
-uint8_t g_square_edge     = 0;     /* 已完成边数 (0~4) */
-float   g_square_yaw_base = 0.0f;  /* 当前边直行目标朝向 */
-float   g_turn_start_yaw  = 0.0f;  /* 当前转弯起点 yaw */
-uint8_t g_one_shot_turn   = 0;     /* T 命令单次转弯标志 */
-float   g_one_shot_angle  = 0.0f;  /* T 命令目标角度 */
+ * T命令(one_shot=1)优先级最高: 单次转弯后停车 */
+square_t g_square = {0};
 static uint32_t g_brake_start = 0; /* 刹车开始时间戳 */
 
 /* ─── 文本回传: 通过 UART_BLUETOOTH 发文本给 ESP32 → 电脑 ───
@@ -118,7 +113,7 @@ static float my_atof(const char *s)
  */
 static void CMD_Report(void)
 {
-    float rpt[6] = { g_base_speed, g_turn_p, g_turn_d,
+    float rpt[6] = { g_track_cfg.base_speed, g_track_cfg.turn_p, g_track_cfg.turn_d,
                      drv_kp, drv_ki, drv_kd };
     UART_Bluetooth_Send(rpt, 6);
 }
@@ -138,28 +133,28 @@ static void CMD_Exec(void)
 
     switch (c) {
     case 'b':
-        g_base_speed  = v; g_base_rpm = v;
-        snprintf(ack, sizeof(ack), "[MSPM0] base_speed=%.1f\n", g_base_speed);
+        g_track_cfg.base_speed  = v; g_base_rpm = v;
+        snprintf(ack, sizeof(ack), "[MSPM0] base_speed=%.1f\n", g_track_cfg.base_speed);
         CMD_SendText(ack);
         break;
     case 'p':
-        g_turn_p = v;
-        snprintf(ack, sizeof(ack), "[MSPM0] turn_p=%.2f\n", g_turn_p);
+        g_track_cfg.turn_p = v;
+        snprintf(ack, sizeof(ack), "[MSPM0] turn_p=%.2f\n", g_track_cfg.turn_p);
         CMD_SendText(ack);
         break;
     case 'd':
-        g_turn_d = v;
-        snprintf(ack, sizeof(ack), "[MSPM0] turn_d=%.2f\n", g_turn_d);
+        g_track_cfg.turn_d = v;
+        snprintf(ack, sizeof(ack), "[MSPM0] turn_d=%.2f\n", g_track_cfg.turn_d);
         CMD_SendText(ack);
         break;
     case 'o':
-        g_pivot_speed = v;
-        snprintf(ack, sizeof(ack), "[MSPM0] pivot_speed=%.1f\n", g_pivot_speed);
+        g_track_cfg.pivot_speed = v;
+        snprintf(ack, sizeof(ack), "[MSPM0] pivot_speed=%.1f\n", g_track_cfg.pivot_speed);
         CMD_SendText(ack);
         break;
     case 'f':   /* 直角弯前冲时间 (ms) */
-        g_corner_fwd_ms = v;
-        snprintf(ack, sizeof(ack), "[MSPM0] corner_fwd_ms=%.0f\n", g_corner_fwd_ms);
+        g_track_cfg.corner_fwd_ms = v;
+        snprintf(ack, sizeof(ack), "[MSPM0] corner_fwd_ms=%.0f\n", g_track_cfg.corner_fwd_ms);
         CMD_SendText(ack);
         break;
 
@@ -198,11 +193,11 @@ static void CMD_Exec(void)
                  "[MSPM0] ? mode=%d run=%d base=%.1f p=%.2f d=%.2f pivot=%.1f fwd=%.0f target=%.1f\n"
                  "       yaw=%.2f target=%.2f err=%.2f assist=%d x=%.0f y=%.0f total=%.0f edge=%d\n"
                  "       imu=%d oled=%d use_imu=%d laps=%d/%d (1=present,0=not)\n",
-                 g_mode, g_running, g_base_speed, g_turn_p, g_turn_d,
-                 g_pivot_speed, g_corner_fwd_ms, g_target_rpm,
+                 g_mode, g_running, g_track_cfg.base_speed, g_track_cfg.turn_p, g_track_cfg.turn_d,
+                 g_track_cfg.pivot_speed, g_track_cfg.corner_fwd_ms, g_target_rpm,
                  IMU_Get_Yaw_Cached(), g_yaw_target, g_yaw_err, g_imu_assist,
                  Odom_Get_X(), Odom_Get_Y(), Odom_Get_Total_Dist(), Odom_Get_Edge_Index(),
-                 g_imu_present, g_oled_present, g_use_imu, g_current_lap, g_target_laps);
+                 g_imu.present, g_oled_present, g_imu.use_imu, g_current_lap, g_target_laps);
         CMD_SendText(ack);
         CMD_Report();   /* 同时发 JustFloat 帧 */
         break;
@@ -228,11 +223,11 @@ static void CMD_Exec(void)
             float r, p, y;
             uint8_t ret = IMU_Read_RPY(&r, &p, &y);
             snprintf(ack, sizeof(ack),
-                "[MSPM0] g_imu_present=%d  g_use_imu=%d  IMU_Read_RPY=%d\n"
+                "[MSPM0] g_imu.present=%d  g_imu.use_imu=%d  IMU_Read_RPY=%d\n"
                 "       cached: Roll=%.2f Pitch=%.2f Yaw=%.2f (deg)\n",
-                g_imu_present, g_use_imu, ret, r, p, y);
+                g_imu.present, g_imu.use_imu, ret, r, p, y);
             CMD_SendText(ack);
-            if (!g_imu_present) {
+            if (!g_imu.present) {
                 CMD_SendText("[MSPM0] IMU no frame received yet.\n"
                              "       check wiring: JY61P TX→PA11, RX→PA10, VCC→3.3V, GND→GND\n"
                              "       check JY61P baudrate (default 9600), check UART_IMU baudrate=9600\n");
@@ -299,8 +294,8 @@ static void CMD_Exec(void)
             "[MSPM0] yaw=%.2f target=%.2f err=%.2f assist=%d\n"
             "       m3: state=%d edge=%d turn_start=%.2f | one_shot=%d angle=%.1f\n",
             g_yaw_now, g_yaw_target, g_yaw_err, g_imu_assist,
-            g_square_state, g_square_edge, g_turn_start_yaw,
-            g_one_shot_turn, g_one_shot_angle);
+            g_square.state, g_square.edge, g_square.turn_start_yaw,
+            g_square.one_shot, g_square.one_shot_angle);
         CMD_SendText(ack);
         break;
     case 'x':   /* 查询位置 */
@@ -349,17 +344,17 @@ static void CMD_Exec(void)
             "       track: OK\n"
             "       cmd:   OK\n"
             "       motor: OK ( drv_pid=%.2f/%.3f/%.2f )\n"
-            "       imu:   %s (g_imu_present=%d, via UART_IMU 9600bps)\n"
+            "       imu:   %s (g_imu.present=%d, via UART_IMU 9600bps)\n"
             "       odom:  OK\n"
             "       oled:  %s (g_oled_present=%d, via I2C PA17/PA15)\n"
             "       button:OK\n"
-            "       imu_parse: %s (g_use_imu=%d, 1=on/0=paused, OLED unaffected)\n"
+            "       imu_parse: %s (g_imu.use_imu=%d, 1=on/0=paused, OLED unaffected)\n"
             "       pins:  MOTOR_I2C=PB11/PB12, OLED_I2C=PA17/PA15, IMU_UART=PA10/PA11, GREY_OUT=PA1\n"
             "       btns:  START=PA7, LAP_UP=PA18, MODE=PB1, RESET=PB14\n",
             drv_kp, drv_ki, drv_kd,
-            g_imu_present ? "OK" : "FAIL/SKIPPED", g_imu_present,
+            g_imu.present ? "OK" : "FAIL/SKIPPED", g_imu.present,
             g_oled_present ? "OK" : "FAIL/SKIPPED", g_oled_present,
-            g_use_imu ? "ON" : "PAUSED", g_use_imu);
+            g_imu.use_imu ? "ON" : "PAUSED", g_imu.use_imu);
         CMD_SendText(ack);
         break;
     case 'M':   /* 读电机编码器 + 直接发 PWM 测试驱动板输出 */
@@ -507,7 +502,6 @@ void CMD_Poll(void)
  * m3 正方形行进 + T 命令单次转弯 (纯 IMU + 编码器, 非灰度)
  * 从原 square.c 合并而来, 状态机 + T 命令统一管理
  * ═══════════════════════════════════════════════════════════════════════ */
-extern volatile uint32_t g_sys_tick;   /* main.c 的 1ms 时基 */
 
 #define SQ_EDGE_LEN    1500.0f   /* 边长 mm */
 #define SQ_TURN_THRESH 5.0f      /* 转弯到位阈值 (度) */
@@ -527,17 +521,17 @@ static float square_norm_angle(float a)
 
 void Square_Init(void)
 {
-    g_square_state = 0;
-    g_square_edge = 0;
-    g_square_yaw_base = IMU_Get_Yaw_Cached();
-    g_one_shot_turn = 0;
+    g_square.state = 0;
+    g_square.edge = 0;
+    g_square.yaw_base = IMU_Get_Yaw_Cached();
+    g_square.one_shot = 0;
     Odom_Reset();
-    g_yaw_target = g_square_yaw_base;
+    g_yaw_target = g_square.yaw_base;
 }
 
 void Square_Turn(float angle)
 {
-    if (!g_imu_present) {
+    if (!g_imu.present) {
         CMD_SendText("[MSPM0] TURN: IMU offline, refused\n");
         return;
     }
@@ -545,9 +539,9 @@ void Square_Turn(float angle)
         CMD_SendText("[MSPM0] TURN: invalid angle\n");
         return;
     }
-    g_one_shot_turn  = 1;
-    g_one_shot_angle = angle;
-    g_turn_start_yaw = IMU_Get_Yaw_Cached();
+    g_square.one_shot  = 1;
+    g_square.one_shot_angle = angle;
+    g_square.turn_start_yaw = IMU_Get_Yaw_Cached();
     g_mode = 3;
     g_running = 1;
     CMD_SendText("[MSPM0] TURN: target angle set, running\n");
@@ -556,17 +550,17 @@ void Square_Turn(float angle)
 /* T 命令单次转弯: delta=now-start, err=target-delta */
 static void square_one_shot(float yaw_now)
 {
-    float delta = square_norm_angle(yaw_now - g_turn_start_yaw);
-    float err = g_one_shot_angle - delta;
+    float delta = square_norm_angle(yaw_now - g_square.turn_start_yaw);
+    float err = g_square.one_shot_angle - delta;
     g_yaw_err = err;
     if (err > SQ_TURN_THRESH) {
-        g_motor_l_speed = -SQ_TURN_SPD;   /* 左转 */
-        g_motor_r_speed =  SQ_TURN_SPD;
+        g_motor.l = -SQ_TURN_SPD;   /* 左转 */
+        g_motor.r =  SQ_TURN_SPD;
     } else if (err < -SQ_TURN_THRESH) {
-        g_motor_l_speed =  SQ_TURN_SPD;   /* 右转 */
-        g_motor_r_speed = -SQ_TURN_SPD;
+        g_motor.l =  SQ_TURN_SPD;   /* 右转 */
+        g_motor.r = -SQ_TURN_SPD;
     } else {
-        g_one_shot_turn = 0; g_running = 0; Motor_Stop();
+        g_square.one_shot = 0; g_running = 0; Motor_Stop();
         CMD_SendText("[MSPM0] TURN done\n");
     }
 }
@@ -574,16 +568,16 @@ static void square_one_shot(float yaw_now)
 /* state=0 直行: yaw误差做差速保持直线 */
 static void square_straight(float yaw_now)
 {
-    float err = square_norm_angle(g_square_yaw_base - yaw_now);
+    float err = square_norm_angle(g_square.yaw_base - yaw_now);
     g_yaw_err = err;
     float correction = err * SQ_YAW_KP;
     if (correction >  SQ_YAW_CLIP) correction =  SQ_YAW_CLIP;
     if (correction < -SQ_YAW_CLIP) correction = -SQ_YAW_CLIP;
-    g_motor_l_speed = (int16_t)(SQ_BASE_SPD - correction);
-    g_motor_r_speed = (int16_t)(SQ_BASE_SPD + correction);
+    g_motor.l = (int16_t)(SQ_BASE_SPD - correction);
+    g_motor.r = (int16_t)(SQ_BASE_SPD + correction);
     if (Odom_Get_Edge_Dist() >= SQ_EDGE_LEN) {
-        g_square_state = 1;
-        g_turn_start_yaw = yaw_now;
+        g_square.state = 1;
+        g_square.turn_start_yaw = yaw_now;
         CMD_SendText("[MSPM0] SQUARE: edge done, turning\n");
     }
 }
@@ -591,17 +585,17 @@ static void square_straight(float yaw_now)
 /* state=1 转弯: 原地左转90°, delta=now-start 目标90° */
 static void square_turn(float yaw_now)
 {
-    float delta = square_norm_angle(yaw_now - g_turn_start_yaw);
+    float delta = square_norm_angle(yaw_now - g_square.turn_start_yaw);
     float err = 90.0f - delta;
     g_yaw_err = err;
     if (err > SQ_TURN_THRESH) {
-        g_motor_l_speed = -SQ_TURN_SPD;   /* 左转 */
-        g_motor_r_speed =  SQ_TURN_SPD;
+        g_motor.l = -SQ_TURN_SPD;   /* 左转 */
+        g_motor.r =  SQ_TURN_SPD;
     } else if (err < -SQ_TURN_THRESH) {
-        g_motor_l_speed =  SQ_TURN_SPD;   /* 过冲, 右转修正 */
-        g_motor_r_speed = -SQ_TURN_SPD;
+        g_motor.l =  SQ_TURN_SPD;   /* 过冲, 右转修正 */
+        g_motor.r = -SQ_TURN_SPD;
     } else {
-        g_square_state = 3;  /* 到位进刹车 */
+        g_square.state = 3;  /* 到位进刹车 */
         g_brake_start = g_sys_tick;
         CMD_SendText("[MSPM0] SQUARE: turn done, braking\n");
     }
@@ -610,16 +604,16 @@ static void square_turn(float yaw_now)
 /* state=3 刹车: 停车消惯性再切直行 */
 static void square_brake(void)
 {
-    g_motor_l_speed = 0; g_motor_r_speed = 0;
+    g_motor.l = 0; g_motor.r = 0;
     if ((uint32_t)(g_sys_tick - g_brake_start) >= SQ_BRAKE_MS) {
-        g_square_yaw_base = IMU_Get_Yaw_Cached();
+        g_square.yaw_base = IMU_Get_Yaw_Cached();
         Odom_Reset_Edge();
-        g_square_edge++;
-        if (g_square_edge >= 4) {
-            g_square_state = 2;
+        g_square.edge++;
+        if (g_square.edge >= 4) {
+            g_square.state = 2;
             CMD_SendText("[MSPM0] SQUARE: all edges done\n");
         } else {
-            g_square_state = 0;
+            g_square.state = 0;
             CMD_SendText("[MSPM0] SQUARE: next edge\n");
         }
     }
@@ -628,8 +622,8 @@ static void square_brake(void)
 void Square_Loop(void)
 {
     /* IMU离线保护 */
-    if (!g_imu_present) {
-        g_motor_l_speed = 0; g_motor_r_speed = 0;
+    if (!g_imu.present) {
+        g_motor.l = 0; g_motor.r = 0;
         if (g_running) {
             g_running = 0; Motor_Stop();
             CMD_SendText("[MSPM0] SQUARE: IMU offline, stop\n");
@@ -640,12 +634,12 @@ void Square_Loop(void)
     float yaw_now = IMU_Get_Yaw_Cached();
     g_yaw_now = yaw_now;
 
-    if (g_one_shot_turn) {
+    if (g_square.one_shot) {
         square_one_shot(yaw_now);
     } else {
-        switch (g_square_state) {
+        switch (g_square.state) {
         case 2:  /* 完成, 停车 */
-            g_motor_l_speed = 0; g_motor_r_speed = 0;
+            g_motor.l = 0; g_motor.r = 0;
             g_running = 0; Motor_Stop();
             CMD_SendText("[MSPM0] SQUARE DONE! auto-stop\n");
             break;
