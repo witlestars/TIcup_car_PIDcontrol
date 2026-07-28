@@ -41,10 +41,13 @@ static void Mode_RunStep(void)
     switch (g_mode) {
     case 0:
         Track_Loop();
-        Odom_Update();
+        /* m0 巡线不调 Odom_Update: 巡线只用灰度+IMU, 无需里程计
+         * Odom_Update 会触发 4 次 I2C 读编码器, 与 Motor_Send_Speed 的 I2C 写
+         * 挤在同一 10ms 窗口, ISR 打断软件 I2C 时序导致驱动板卡死 */
         break;
     case 3:
         Square_Loop();
+        Odom_Update();   /* m3 正方形模式才需要里程计 (走固定距离) */
         break;
     default:   /* mode 1 空转 */
         g_motor.l = (int16_t)g_target_rpm;
