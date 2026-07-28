@@ -12,6 +12,7 @@
 #include "BSP/template/uart_bluetooth.h"
 #include "BSP/imu.h"
 #include "BSP/lora.h"
+#include "BSP/k230.h"
 #include "BSP/odometry.h"
 #include "BSP/oled.h"
 #include "BSP/button.h"
@@ -61,9 +62,9 @@ int main(void)
     CMD_SendText("[MSPM0] init: cmd\n");    CMD_Init();
     CMD_SendText("[MSPM0] init: motor\n");  Motor_Init();
 
-    /* IMU: UART_IMU 9600bps, 等500ms让JY61P冷启动, 启用RX中断 */
+    /* IMU: UART_IMU 9600bps, 等500ms让JY61P冷启动
+     * IMU_Init 内部会调用 IMU_EnableRxIRQ 开启 RX 中断 */
     delay_ms(500);
-    IMU_EnableRxIRQ();
     CMD_SendText("[MSPM0] init: imu\n");
     CMD_SendText(IMU_Init() == 0 ? "[MSPM0] IMU JY61P OK\n" : "[MSPM0] IMU JY61P FAIL\n");
 
@@ -82,20 +83,21 @@ int main(void)
     }
 
     CMD_SendText("[MSPM0] init: button\n"); Button_Init();
+    CMD_SendText("[MSPM0] init: k230\n");   K230_Init();
     CMD_SendText("[MSPM0] init done\n");
 
     uint32_t last_10ms = 0;
     while (1) {
         CMD_Poll();
-        IMU_EchoTick();
         LORA_Poll();
-        if (g_imu.use_imu) IMU_Poll();   /* 每轮解析降低 yaw 延迟 */
+        /* IMU 帧 ISR 内直接解析, 无需主循环 polling */
 
         /* 10ms 节拍: 按钮 + 模式分发 + 电机指令 */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10) {
             last_10ms = g_sys_tick;
 
             Button_HandleEvents();   /* ISR 设标志, 这里执行业务 */
+            K230_Poll();             /* 轮询 K230 视觉信号 (10ms) */
 
             if (g_laps_done && g_running) {
                 g_running = 0; Motor_Stop();

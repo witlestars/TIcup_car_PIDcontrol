@@ -1,8 +1,8 @@
 /**
  * @file    cmd.c
  * @brief   UART 命令解析 — 从 ESP32 接收并修改全局参数
- * 
-/* 命令格式 (通过 WiFi→ESP32→UART_BLUETOOTH):
+ *
+ * 命令格式 (通过 WiFi→ESP32→UART_BLUETOOTH):
  *   b200    基础速度 = 200 (驱动板单位)
  *   p18     TURN_GAIN_P = 18
  *   d1.5    TURN_GAIN_D = 1.5
@@ -47,7 +47,6 @@ static uint8_t cmd_idx = 0;
 uint8_t g_mode      = 0;     /* 0=巡线, 1=空转, 3=不倒翁(IMU yaw自稳) */
 float   g_target_rpm = 200;  /* 空转目标速度 (驱动板单位) */
 uint8_t g_running    = 0;    /* 上电默认停止, 发 'g' 启动, 's' 停止 */
-uint8_t g_imu_uart_echo = 0;  /* 1=把 IMU 串口收到的原始字节回显到 PC */
 
 /* 驱动板 PID 缓存 (cmd修改后发给驱动板) */
 static float drv_kp = 0.8f;
@@ -123,7 +122,7 @@ static void CMD_Report(void)
  */
 static void CMD_Exec(void)
 {
-    char ack[256];   /* 加大到256, 避免 ? 命令的多行回传被截断 */
+    char ack[512];   /* 加大到512, 容纳 B 命令的多行 Boot Status 回传 (约466字节) */
 
     if (cmd_idx == 0) return;
     cmd_buf[cmd_idx] = '\0';
@@ -332,10 +331,8 @@ static void CMD_Exec(void)
         snprintf(ack, sizeof(ack), "[MSPM0] target_laps=%d\n", g_target_laps);
         CMD_SendText(ack);
         break;
-    case 'U':   /* 切换 IMU 串口原始字节回显 (诊断 JY61P 串口通不通) */
-        g_imu_uart_echo = !g_imu_uart_echo;
-        snprintf(ack, sizeof(ack), "[MSPM0] IMU UART raw echo %s\n",
-                 g_imu_uart_echo ? "ON (spamming hex)" : "OFF");
+    case 'U':   /* (已移除) 原 IMU 串口原始字节回显, ISR 直解析方案下不再支持 */
+        snprintf(ack, sizeof(ack), "[MSPM0] IMU UART raw echo removed (ISR parse)\n");
         CMD_SendText(ack);
         break;
     case 'B':   /* 回显启动状态 (Boot log): 各模块初始化结果 */

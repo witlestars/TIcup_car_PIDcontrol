@@ -22,7 +22,6 @@
 extern uint8_t g_mode;       /* 0=巡线, 1=空转, 3=不倒翁(IMU yaw自稳) */
 extern float   g_target_rpm; /* 空转目标 RPM */
 extern uint8_t g_running;    /* 1=运行, 0=停止 (上电默认0, 发'g'启动, 's'停止) */
-extern uint8_t g_imu_uart_echo; /* 1=IMU 串口原始字节回显到 PC */
 
 /* 1ms 时基 (定义在 main.c, button.c/cmd.c 共用) */
 extern volatile uint32_t g_sys_tick;

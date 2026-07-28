@@ -43,7 +43,7 @@ void Odom_Init(void);
 
 /**
  * @brief 每10ms调用: 读编码器+IMU, 更新位置
- *        必须在 IMU_Poll() 之后调用 (用缓存yaw)
+ *        IMU yaw 由 ISR 后台实时更新, 此处直接读缓存
  * @return 累计总里程 (mm)
  */
 float Odom_Update(void);

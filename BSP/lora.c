@@ -116,7 +116,7 @@ uint16_t LORA_Read(uint8_t *buf, uint16_t max_len)
 }
 
 /* 主循环调: echo 诊断 (g_lora.echo=1 时把收到字节 hex 回显到 UART_BLUETOOTH)
- * 模仿 IMU_EchoTick, 非阻塞, 每轮预算 16 字节 */
+ * 非阻塞, 每轮预算 16 字节 */
 void LORA_Poll(void)
 {
     if (!g_lora.echo) return;

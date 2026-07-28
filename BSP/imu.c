@@ -1,7 +1,7 @@
 /**
  * @file    imu.c
  * @brief   维特智能 JY61P 串口驱动 (UART_IMU, 9600bps, PA10/PA11)
- *          合并原 imu_uart.c, 统一管理 ISR + 环形缓冲 + 帧解析
+ *          ISR 内直接解析帧 (无环形缓冲, 借鉴队友方案)
  *
  * 帧格式 (11字节): [0x55][TYPE][D0..D7][SUM]
  *   TYPE=0x51 加速度(/32768*16=g) 0x52 角速度(/32768*2000=°/s) 0x53 角度(/32768*180=度)
@@ -14,22 +14,15 @@
 #include "delay.h"
 #include "ti_msp_dl_config.h"
 
-extern uint8_t g_imu_uart_echo;
-
 /* ─── 缓存数据 (解析后自动更新) ─── */
 imu_state_t g_imu = { .present = 0, .use_imu = 1 };
 
-/* ─── RX 环形缓冲 (ISR 生产, IMU_Poll 消费) ─── */
-#define RX_BUF_SIZE 256
-static volatile uint8_t s_rx_buf[RX_BUF_SIZE];
-static volatile uint8_t s_rx_head, s_rx_tail;
-
-/* ─── 帧解析状态机 ─── */
+/* ─── 帧解析状态机 (ISR 内运行, 静态变量) ─── */
 typedef enum { PS_FIND_55, PS_TYPE, PS_DATA, PS_SUM } parse_state_t;
 static parse_state_t s_state = PS_FIND_55;
 static uint8_t s_frame_type, s_data_idx, s_data_buf[8], s_sum;
 
-/* ═══════════════ UART 层: ISR + 环形缓冲 + 收发字节 ═══════════════ */
+/* ═══════════════ UART 层: ISR + 中断使能 + 收发字节 ═══════════════ */
 
 void IMU_EnableRxIRQ(void)
 {
@@ -39,76 +32,7 @@ void IMU_EnableRxIRQ(void)
     NVIC_EnableIRQ(UART_IMU_INST_INT_IRQN);
 }
 
-/* UART0 RX 中断: 搬字节到环形缓冲, ISR 内不做 echo/解析 (防卡死) */
-void UART0_IRQHandler(void)
-{
-    uint32_t irq = DL_UART_Main_getPendingInterrupt(UART_IMU_INST);
-    switch (irq) {
-    case DL_UART_MAIN_IIDX_RX:
-        while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
-            uint8_t b = (uint8_t)DL_UART_Main_receiveData(UART_IMU_INST);
-            uint8_t next = (uint8_t)(s_rx_head + 1);
-            if (next != s_rx_tail) {
-                s_rx_buf[s_rx_head] = b;
-                s_rx_head = next;
-            }
-        }
-        break;
-    case DL_UART_MAIN_IIDX_OVERRUN_ERROR:
-        while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
-            (void)DL_UART_Main_receiveData(UART_IMU_INST);
-        }
-        break;
-    default:
-        break;
-    }
-}
-
-static uint8_t imu_get_byte(uint8_t *byte_out)
-{
-    if (s_rx_head == s_rx_tail) return 0;
-    *byte_out = s_rx_buf[s_rx_tail];
-    s_rx_tail = (uint8_t)(s_rx_tail + 1);
-    return 1;
-}
-
-/* 发 N 字节给 JY61P (归零/解锁/保存命令: 0xFF 0xAA REG VAL_LO VAL_HI) */
-void IMU_SendBytes(const uint8_t *data, uint8_t len)
-{
-    for (uint8_t i = 0; i < len; i++) {
-        uint16_t timeout = 60000;
-        while (DL_UART_Main_isTXFIFOFull(UART_IMU_INST) && timeout--);
-        if (timeout == 0) break;
-        DL_UART_Main_transmitDataBlocking(UART_IMU_INST, data[i]);
-    }
-}
-
-/* 主循环调: echo 诊断输出 ('U' 命令开启, 非阻塞, TX 满跳过) */
-void IMU_EchoTick(void)
-{
-    if (!g_imu_uart_echo) return;
-    const char h[] = "0123456789ABCDEF";
-    uint8_t budget = 8;
-    while (budget--) {
-        uint8_t b;
-        if (!imu_get_byte(&b)) break;
-        char hex[3];
-        hex[0] = h[(b >> 4) & 0x0F];
-        hex[1] = h[b & 0x0F];
-        hex[2] = ' ';
-        for (uint8_t i = 0; i < 3; i++) {
-            if (!DL_UART_Main_isTXFIFOFull(UART_BLUETOOTH_INST)) {
-                DL_UART_Main_transmitDataBlocking(UART_BLUETOOTH_INST, (uint8_t)hex[i]);
-            }
-        }
-    }
-    if (!DL_UART_Main_isTXFIFOFull(UART_BLUETOOTH_INST)) {
-        DL_UART_Main_transmitDataBlocking(UART_BLUETOOTH_INST, '\n');
-    }
-}
-
-/* ═══════════════ 帧解析层 ═══════════════ */
-
+/* ISR 内单字节解析 (借鉴队友方案: ISR 直接喂状态机, 无环形缓冲) */
 static void imu_parse_byte(uint8_t b)
 {
     switch (s_state) {
@@ -150,20 +74,51 @@ static void imu_parse_byte(uint8_t b)
     }
 }
 
+/* UART0 RX 中断: 读字节直接喂状态机, 处理 OVERRUN 防 FIFO 卡死 */
+void UART0_IRQHandler(void)
+{
+    switch (DL_UART_Main_getPendingInterrupt(UART_IMU_INST)) {
+    case DL_UART_MAIN_IIDX_RX:
+        while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
+            uint8_t b = (uint8_t)DL_UART_Main_receiveData(UART_IMU_INST);
+            imu_parse_byte(b);
+        }
+        break;
+    case DL_UART_MAIN_IIDX_OVERRUN_ERROR:
+        while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
+            (void)DL_UART_Main_receiveData(UART_IMU_INST);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* 发 N 字节给 JY61P (归零/解锁/保存命令: 0xFF 0xAA REG VAL_LO VAL_HI) */
+void IMU_SendBytes(const uint8_t *data, uint8_t len)
+{
+    for (uint8_t i = 0; i < len; i++) {
+        uint16_t timeout = 60000;
+        while (DL_UART_Main_isTXFIFOFull(UART_IMU_INST) && timeout--);
+        if (timeout == 0) break;
+        DL_UART_Main_transmitDataBlocking(UART_IMU_INST, data[i]);
+    }
+}
+
 /* ═══════════════ 对外 API ═══════════════ */
 
-/* 等 1000ms 看是否收到 JY61P 帧, 返回0=成功 */
+/* 等 1000ms 看是否收到 JY61P 帧, 返回0=成功
+ * 内部先启用 RX 中断 (NVIC + 外设级 RX/OVERRUN), 再 polling 等 present */
 uint8_t IMU_Init(void)
 {
     if (!g_imu.use_imu) { g_imu.present = 0; return 0xFF; }
+    IMU_EnableRxIRQ();   /* 启用 UART_IMU RX 中断 (NVIC_EnableIRQ + RX|OVERRUN) */
     s_state = PS_FIND_55; s_data_idx = 0; g_imu.present = 0;
     while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
         (void)DL_UART_Main_receiveData(UART_IMU_INST);
     }
     for (uint16_t i = 0; i < 200; i++) {
         delay_ms(5);
-        uint8_t b;
-        while (imu_get_byte(&b)) imu_parse_byte(b);
         if (g_imu.present) return 0;
     }
     return 0x01;
@@ -190,14 +145,6 @@ uint8_t IMU_Calibrate_Z(void)
     IMU_SendBytes(save,  5); delay_ms(200);
     g_imu.yaw = 0.0f;
     return 0;
-}
-
-/* 主循环每轮调用: 从环形缓冲取字节解析帧, 降低 yaw 延迟避免车乱跑 */
-void IMU_Poll(void)
-{
-    if (!g_imu.use_imu) return;
-    uint8_t b, budget = 32;
-    while (budget-- && imu_get_byte(&b)) imu_parse_byte(b);
 }
 
 float IMU_Get_Yaw_Cached(void) { return g_imu.yaw; }
