@@ -22,8 +22,9 @@
 #define __LORA_H
 #include <stdint.h>
 
-/* LoRa 状态 (诊断 + 控制) */
-typedef struct {
+/* LoRa 状态 (诊断 + 控制)
+ * volatile: ISR 写 present/rx_cnt, 主循环读, 防编译器缓存 */
+typedef volatile struct {
     uint8_t  present;   /* 1=收到过字节 */
     uint8_t  echo;      /* 1=回显收到字节到 UART_BLUETOOTH (调试用, 'U'类机制) */
     uint16_t rx_cnt;    /* 累计接收字节数 (诊断) */

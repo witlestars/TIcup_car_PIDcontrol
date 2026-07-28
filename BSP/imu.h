@@ -8,8 +8,9 @@
 #define __IMU_H
 #include <stdint.h>
 
-/* IMU 缓存数据 (ISR 内解析后自动更新) */
-typedef struct {
+/* IMU 缓存数据 (ISR 内解析后自动更新)
+ * 必须 volatile: ISR 写 roll/pitch/yaw/present 等, 主循环读, 防编译器缓存寄存器 */
+typedef volatile struct {
     float roll, pitch, yaw;       /* 0x53 角度 (度) */
     float gyrox, gyroy, gyroz;   /* 0x52 角速度 (°/s) */
     float accx, accy, accz;       /* 0x51 加速度 (g) */
