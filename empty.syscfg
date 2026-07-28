@@ -239,6 +239,7 @@ UART3.txPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric8";
 UART3.txPinConfig.enableConfig         = true;
 UART3.rxPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 UART3.rxPinConfig.onlyInternalResistor = scripting.forceWrite(false);
+UART3.rxPinConfig.internalResistor     = "PULL_UP";   /* RX 内部上拉, 防止未接 LoRa 时浮动捡噪声 */
 UART3.rxPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
 UART3.rxPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric9";
 UART3.rxPinConfig.enableConfig         = true;
