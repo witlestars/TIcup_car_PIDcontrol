@@ -122,7 +122,8 @@ static void CMD_Report(void)
  */
 static void CMD_Exec(void)
 {
-    char ack[512];   /* 加大到512, 容纳 B 命令的多行 Boot Status 回传 (约466字节) */
+    static char ack[512];   /* static 放 BSS 段, 避免占栈 (栈仅512B, 局部512会溢出)
+                             * CMD_Exec 单线程主循环调用, 不可重入, static 安全 */
 
     if (cmd_idx == 0) return;
     cmd_buf[cmd_idx] = '\0';
