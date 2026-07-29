@@ -88,7 +88,7 @@ void OLED_Task()
         return; // 屏幕没插则跳过
 
     // 第一行：标题栏，显示系统状态
-    if (g_running)
+    if (g_running == true)
     {
         OLED_PrintfAt(0, 0, "=== RUNNING ===");
     }
@@ -104,5 +104,4 @@ void OLED_Task()
 
     // 第四行：预留显示一些动态数据，比如速度或者陀螺仪角度
     // OLED_PrintfAt(3, 0, "Yaw: %.1f", g_imu_data.yaw);
-    OLED_PrintfAt(3, 0, "Tick: %d  ", g_sys_tick);
 }

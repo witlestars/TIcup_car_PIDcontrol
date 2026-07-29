@@ -21,6 +21,8 @@ int main(void)
 
     /* 2. 使能全局中断[cite: 2] */
     __enable_irq();
+    NVIC_EnableIRQ(GPIOA_INT_IRQn);
+    NVIC_EnableIRQ(GPIOB_INT_IRQn);
 
     /* 3.模块初始化 */
     // IMU_Init();
@@ -124,38 +126,33 @@ void UART_K230_INST_IRQHandler(void)
     同过中断改变标志位，在主循环中传参来切换模式
 */
 /* 先看task.c！！！！！其中已留好任务切换的标志位 */
-#define DEBOUNCE_TIME_MS 20
-static uint32_t last_time = 0;
+#define DEBOUNCE_TIME_MS 200
 // 这是 GPIO 统一的硬件中断入口函数
 // 按键中断处理函数
 void GROUP1_IRQHandler(void)
 {
     // 每个按键建议用独立的防抖时间戳，防止互相干扰
     static uint32_t last_time_start = 0;
-    static uint32_t last_time_up = 0;
-    static uint32_t last_time_dn = 0;
+    static uint32_t last_time_chassis = 0;
+    static uint32_t last_time_balance = 0;
 
     // ====== 循环检查并清除 GPIOA 端口的所有按键标志位 ======
     uint32_t gpioA_status;
     while ((gpioA_status = DL_GPIO_getPendingInterrupt(GPIOA)) != 0)
     {
-        if (gpioA_status == GPIO_BUTTON_BTN_START_IIDX)
+        if (gpioA_status == GPIO_BUTTON_BTN_3_IIDX)
         {
-            if ((g_sys_tick - last_time_start) > DEBOUNCE_TIME_MS)
+            if ((g_sys_tick - last_time_balance) > DEBOUNCE_TIME_MS)
             {
-                g_running = !g_running; // 建议改成反转，按一下运行，再按停止
-                last_time_start = g_sys_tick;
+                g_balance_task++;
+                if (g_balance_task >= 4)
+                    g_balance_task = 0;
+                last_time_balance = g_sys_tick;
             }
         }
-        else if (gpioA_status == GPIO_BUTTON_BTN_LAP_UP_IIDX)
+        else if (gpioA_status == GPIO_BUTTON_BTN_1_IIDX)
         {
-            if ((g_sys_tick - last_time_up) > DEBOUNCE_TIME_MS)
-            {
-                g_chassis_task++;
-                if (g_chassis_task >= 3)
-                    g_chassis_task = 0;
-                last_time_up = g_sys_tick;
-            }
+            //空
         }
     }
 
@@ -163,19 +160,23 @@ void GROUP1_IRQHandler(void)
     uint32_t gpioB_status;
     while ((gpioB_status = DL_GPIO_getPendingInterrupt(GPIOB)) != 0)
     {
-        if (gpioB_status == GPIO_BUTTON_BTN_LAP_DN_IIDX)
+        if (gpioB_status == GPIO_BUTTON_BTN_4_IIDX)
         {
-            if ((g_sys_tick - last_time_dn) > DEBOUNCE_TIME_MS)
+            if ((g_sys_tick - last_time_start) > DEBOUNCE_TIME_MS)
             {
-                g_balance_task++;
-                if (g_balance_task >= 4)
-                    g_balance_task = 0;
-                last_time_dn = g_sys_tick;
+                g_running = true;
+                last_time_start = g_sys_tick;
             }
         }
-        else if (gpioB_status == GPIO_BUTTON_BTN_RESET_IIDX)
+        else if (gpioB_status == GPIO_BUTTON_BTN_2_IIDX)
         {
-            // 复位代码
+            if ((g_sys_tick - last_time_chassis) > DEBOUNCE_TIME_MS)
+            {
+                g_chassis_task++;
+                if (g_chassis_task >= 3)
+                    g_chassis_task = 0;
+                last_time_chassis = g_sys_tick;
+            }
         }
     }
 }
