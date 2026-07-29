@@ -33,7 +33,7 @@ void IMU_EnableRxIRQ(void)
 }
 
 /* ISR 内单字节解析 (借鉴队友方案: ISR 直接喂状态机, 无环形缓冲) */
-static void imu_parse_byte(uint8_t b)
+static void IMU_UART_ParseByte(uint8_t b)
 {
     switch (s_state) {
     case PS_FIND_55:
@@ -74,23 +74,33 @@ static void imu_parse_byte(uint8_t b)
     }
 }
 
-/* UART0 RX 中断: 读字节直接喂状态机, 处理 OVERRUN 防 FIFO 卡死 */
-void UART0_IRQHandler(void)
+// 中断函数
+void UART_IMU_INST_IRQHandler(void)
 {
-    switch (DL_UART_Main_getPendingInterrupt(UART_IMU_INST)) {
-    case DL_UART_MAIN_IIDX_RX:
-        while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
-            uint8_t b = (uint8_t)DL_UART_Main_receiveData(UART_IMU_INST);
-            imu_parse_byte(b);
+    // 获取当前触发的是什么中断
+    uint32_t pending_irq = DL_UART_Main_getPendingInterrupt(UART_IMU_INST);
+    // 正常的接收中断
+    if (pending_irq == DL_UART_IIDX_RX) 
+    {
+        // 只要 FIFO 里有数据，就一直读，防止残留数据导致堵塞
+        while (DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST) == false) 
+        {
+            uint8_t rx_data = DL_UART_Main_receiveData(UART_IMU_INST);
+            IMU_UART_ParseByte(rx_data);
         }
-        break;
-    case DL_UART_MAIN_IIDX_OVERRUN_ERROR:
-        while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
-            (void)DL_UART_Main_receiveData(UART_IMU_INST);
-        }
-        break;
-    default:
-        break;
+    }
+    // 溢出、帧错误、校验错误
+    else if ((pending_irq == DL_UART_IIDX_OVERRUN_ERROR) ||
+             (pending_irq == DL_UART_IIDX_BREAK_ERROR) ||
+             (pending_irq == DL_UART_IIDX_FRAMING_ERROR) ||
+             (pending_irq == DL_UART_IIDX_PARITY_ERROR))
+    {
+        // 发生错误时，必须清除标志位防止死锁！
+        DL_UART_Main_clearInterruptStatus(UART_IMU_INST, 
+            (DL_UART_INTERRUPT_OVERRUN_ERROR | 
+             DL_UART_INTERRUPT_BREAK_ERROR | 
+             DL_UART_INTERRUPT_FRAMING_ERROR | 
+             DL_UART_INTERRUPT_PARITY_ERROR));
     }
 }
 
