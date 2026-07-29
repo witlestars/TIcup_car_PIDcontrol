@@ -21,10 +21,12 @@ const GPIO6    = GPIO.addInstance();
 const GPIO7    = GPIO.addInstance();
 const GPIO8    = GPIO.addInstance();
 const GPIO9    = GPIO.addInstance();
+const GPIO10   = GPIO.addInstance();
 const SYSCTL   = scripting.addModule("/ti/driverlib/SYSCTL");
 const SYSTICK  = scripting.addModule("/ti/driverlib/SYSTICK");
 const TIMER    = scripting.addModule("/ti/driverlib/TIMER", {}, false);
 const TIMER1   = TIMER.addInstance();
+const TIMER2   = TIMER.addInstance();
 const UART     = scripting.addModule("/ti/driverlib/UART", {}, false);
 const UART1    = UART.addInstance();
 const UART2    = UART.addInstance();
@@ -195,7 +197,7 @@ UART1.enableFIFO                       = true;
 UART1.txFifoThreshold                  = "DL_UART_TX_FIFO_LEVEL_1_4_EMPTY";
 UART1.enabledInterrupts                = ["RX"];
 UART1.$name                            = "UART_IMU";
-UART1.targetBaudRate                   = 115200;
+UART1.targetBaudRate                   = 9600;
 UART1.peripheral.rxPin.$assign         = "PA11";
 UART1.peripheral.txPin.$assign         = "PA10";
 UART1.txPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric1";
@@ -251,6 +253,31 @@ UART3.DMA_CHANNEL_TX.addressMode       = "b2f";
 UART3.DMA_CHANNEL_TX.srcLength         = "BYTE";
 UART3.DMA_CHANNEL_TX.dstLength         = "BYTE";
 
+/* ═══ 软件串口 (硬件UART全被占, 用GPIO+TIMG0模拟) ═══
+ * PB8 = TX (MSPM0→ESP32), PB10 = RX (ESP32→MSPM0), 9600 bps
+ * TIMG0 定时器 3x 过采样 = 28800Hz, 每 34.7μs 中断采样 RX */
+GPIO10.$name                          = "GPIO_SOFTUART";
+GPIO10.associatedPins.create(2);
+GPIO10.associatedPins[0].$name        = "SOFT_TX";
+GPIO10.associatedPins[0].direction    = "OUTPUT";
+GPIO10.associatedPins[0].initialValue = "SET";
+GPIO10.associatedPins[0].assignedPort = "PORTB";
+GPIO10.associatedPins[0].assignedPin  = "8";
+GPIO10.associatedPins[0].pin.$assign  = "PB8";
+GPIO10.associatedPins[1].$name        = "SOFT_RX";
+GPIO10.associatedPins[1].direction    = "INPUT";
+GPIO10.associatedPins[1].internalResistor = "PULL_UP";
+GPIO10.associatedPins[1].assignedPort = "PORTB";
+GPIO10.associatedPins[1].assignedPin  = "10";
+GPIO10.associatedPins[1].pin.$assign  = "PB10";
+
+/* TIMG0: 软串口 RX 3x过采样定时器, 9600×3=28800Hz → 34.72μs */
+TIMER2.$name        = "SOFTUART_TIMER";
+TIMER2.timerMode    = "PERIODIC";
+TIMER2.timerPeriod  = "34.72 us";
+TIMER2.interrupts   = ["ZERO"];
+TIMER2.timerStartTimer = true;
+
 /**
  * Pinmux solution for unlocked pins/peripherals. This ensures that minor changes to the automatic solver in a future
  * version of the tool will not impact the pinmux you originally saw.  These lines can be completely deleted in order to
@@ -262,7 +289,7 @@ Board.peripheral.$suggestSolution                = "DEBUGSS";
 Board.peripheral.swclkPin.$suggestSolution       = "PA20";
 Board.peripheral.swdioPin.$suggestSolution       = "PA19";
 TIMER1.peripheral.$suggestSolution               = "TIMA0";
-UART1.peripheral.$suggestSolution                = "UART0";
-UART2.peripheral.$suggestSolution                = "UART1";
-UART3.peripheral.$suggestSolution                = "UART2";
+TIMER2.peripheral.$suggestSolution               = "TIMG0";
+UART2.peripheral.$suggestSolution                = "UART2";
+UART3.peripheral.$suggestSolution                = "UART3";
 UART3.DMA_CHANNEL_TX.peripheral.$suggestSolution = "DMA_CH0";

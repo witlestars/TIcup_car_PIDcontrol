@@ -124,14 +124,16 @@ uint8_t Vision_ParseByte(Vision_ProtocolTypeDef *vision, uint8_t data)
         break;
 
     case VISION_RECEIVE_CHECKSUM:// 接收校验和
-        vision->rx_checksum_buf[vision->checksum_count++] = data;
-        
-        // 立刻原地解析
-        if(vision->checksum_count == 2) 
+        if (vision->checksum_count < 2) {
+            vision->rx_checksum_buf[vision->checksum_count++] = data;
+        }
+
+        // 收满2字节校验和立刻解析
+        if(vision->checksum_count == 2)
         {
             // 1. 计算 payload 的 XOR 校验和
             uint8_t calc_checksum = Vision_CalcXor(vision->rx_buf, vision->rx_index);
-            
+
             // 2. 将收到的两个十六进制字符转换成字节
             uint8_t recv_checksum = Vision_HexToByte(vision->rx_checksum_buf[0],
                                                      vision->rx_checksum_buf[1]);
@@ -142,14 +144,21 @@ uint8_t Vision_ParseByte(Vision_ProtocolTypeDef *vision, uint8_t data)
                 // 校验成功，解析 payload
                 Vision_ProcessPayload(vision, vision->rx_buf, vision->rx_index);
             }
-            
+
             // 原地复位状态机，下一秒来的任何字符都将作为新的一帧开始！
             vision->rx_state = VISION_WAIT_HEAD;
             vision->rx_index = 0;
             vision->checksum_count = 0;
         }
         break;
-    
+
+    case VISION_RECEIVE_END:
+    default:
+        /* 未使用状态, 复位 */
+        vision->rx_state = VISION_WAIT_HEAD;
+        vision->rx_index = 0;
+        vision->checksum_count = 0;
+        break;
     }
     return 0;
 }

@@ -19,9 +19,12 @@ static int ZDT_Motor_SendCommand(ZDT_MotorTypeDef *motor, uint8_t *tx_data, uint
     /* 3. 设置传输长度 (本次指令的字节数) */
     DL_DMA_setTransferSize(DMA, motor->dma_tx_ch, tx_len);
 
-    /* 4. 使能 DMA 通道 (非常重要，否则不会发送) */
+    /* 4. 标记忙碌 (DMA_IRQHandler 完成后清零) */
+    g_motor_tx_busy = true;
+
+    /* 5. 使能 DMA 通道 (非常重要，否则不会发送) */
     DL_DMA_enableChannel(DMA, motor->dma_tx_ch);
-    
+
     return 0;
 }
 
