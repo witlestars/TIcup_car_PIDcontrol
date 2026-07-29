@@ -1,14 +1,12 @@
 /**
  * @file    lora.c
- * @brief   大夏龙雀 DX-LR22-433T22D LoRa 串口驱动 (UART_LORA, 9600bps)
- *          透明传输: ISR + 环形缓冲 + 双向收发
- *          模仿 imu.c 模式, 无协议解析 (应用层自行处理)
- *
- * 与 STM32 例程对应关系:
- *   例程 RXNE 中断逐字节接收  → 本驱动 ISR 搬字节到环形缓冲
- *   例程 IDLE 中断标记帧结束 → 本驱动不依赖 IDLE, 应用层按需分帧
- *   例程 echo 测试           → 本驱动 g_lora.echo=1 时 hex 回显到 BT
+ * @brief   大夏龙雀 DX-LR22-433T22D LoRa 串口驱动 — 已禁用 (H题不需要)
+ *          UART_LORA (UART2, PB15/PB16) 已复用给 K230 视觉模块双向通信
+ *          详见 k230.c (UART_LORA_INST_IRQHandler 已接管)
+ *          如需恢复 LoRa: 删除 k230.c 的 UART ISR, 取消本文件 #if 0 即可
  */
+
+#if 0   /* ──── LoRa 禁用区块 (H题改用 K230 占用 UART_LORA) ──── */
 
 #include "lora.h"
 #include "ti_msp_dl_config.h"
@@ -139,3 +137,5 @@ void LORA_Poll(void)
         DL_UART_Main_transmitDataBlocking(UART_BLUETOOTH_INST, '\n');
     }
 }
+
+#endif  /* ──── LoRa 禁用区块结束 ──── */

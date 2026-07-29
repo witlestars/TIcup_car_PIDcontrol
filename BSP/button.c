@@ -13,6 +13,9 @@
 #include "imu.h"
 #include "odometry.h"
 #include "track.h"
+#include "k230.h"
+#include "oled.h"
+#include <stdio.h>
 
 /* 按钮标志位 (ISR 设, HandleEvents 清) */
 #define BTN_BIT_START   0x01
@@ -73,44 +76,51 @@ void GROUP1_IRQHandler(void)
     }
 }
 
-/* 主循环10ms调: 检查标志位执行业务 (ISR设标志后, 这里安全调用CMD_SendText等) */
+/* 主循环10ms调: 检查标志位执行业务 (ISR设标志后, 这里安全调用CMD_SendText等)
+ *
+ * H题按钮分配:
+ *   START  (PA7):  启动/停止切换
+ *   LAP_UP (PA18): 切换题目号 1→2→3→4→5→1, 同步OLED显示+发K230题号
+ *   MODE   (PB1):  空置 (预留, H题暂未用)
+ *   RESET  (PB14): 空置 (预留, H题暂未用)
+ */
 void Button_HandleEvents(void)
 {
     uint8_t flag = g_btn_flag;
     g_btn_flag = 0;
 
     if (flag & BTN_BIT_START) {
-        if (g_laps_done) {
-            g_laps_done = 0; g_current_lap = 0; g_corner_count = 0;
+        if (g_running) {
             g_running = 0; Motor_Stop();
-            CMD_SendText("[MSPM0] LAPS DONE, reset\n");
-        } else if (g_running) {
-            g_running = 0; Motor_Stop();
+            if (g_oled_present) OLED_PrintfAt(1, 0, "Task: %d STOP", g_task_id);
             CMD_SendText("[MSPM0] BTN STOP\n");
         } else {
             g_running = 1; g_track_locked = 0;
+            if (g_oled_present) OLED_PrintfAt(1, 0, "Task: %d RUN ", g_task_id);
             CMD_SendText("[MSPM0] BTN START\n");
         }
     }
 
     if (flag & BTN_BIT_LAP_UP) {
-        if (!g_running && g_target_laps < 9) {
-            g_target_laps++;
-            CMD_SendText("[MSPM0] target_laps+1\n");
+        /* 切换题目 1→2→3→4→5→1 */
+        g_task_id = (g_task_id >= 5) ? 1 : (g_task_id + 1);
+        /* OLED 更新显示 */
+        if (g_oled_present) {
+            OLED_ClearArea(0, 0, 16);
+            OLED_PrintfAt(0, 0, "Task: %d", g_task_id);
         }
+        /* 发题号给 K230 */
+        K230_SendTask(g_task_id);
+        char msg[32];
+        snprintf(msg, sizeof(msg), "[MSPM0] task=%d\n", g_task_id);
+        CMD_SendText(msg);
     }
 
-    if (flag & BTN_BIT_MODE) {
-        switch_mode(!g_imu.use_imu);
-    }
+    /* MODE (PB1): 空置 — H题暂未分配功能 */
+    /* if (flag & BTN_BIT_MODE) { } */
 
-    if (flag & BTN_BIT_RESET) {
-        g_running = 0; Motor_Stop();
-        if (g_imu.present) IMU_Calibrate_Z();
-        Odom_Reset();
-        g_current_lap = 0; g_corner_count = 0; g_laps_done = 0;
-        CMD_SendText("[MSPM0] BTN RESET\n");
-    }
+    /* RESET (PB14): 空置 — H题暂未分配功能 */
+    /* if (flag & BTN_BIT_RESET) { } */
 }
 
 /* 调试用: bit0=START(PA7) bit1=LAP_UP(PA18) bit2=MODE(PB1) bit3=RESET(PB14) */

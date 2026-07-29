@@ -18,6 +18,7 @@
  *   T90     转任意角度 (T90=左转90°, T-45=右转45°, 正=左转yaw+, 完成后自动停车)
  *   E0/E1   IMU 解析开关 (改串口后不再与OLED互斥): E1=启用IMU解析, E0=暂停IMU解析
  *   L3      设置目标圈数 = 3 (替代原 LAP_DN 按钮, 范围1~9)
+ *   N       切换题目号 1~5 (H题, 同步OLED+发K230): N3=第3题, N无参=下一题
  *   e0/e1   切换 IMU 辅助转弯
  *   U       切换 UART_IMU 原始字节回显 (诊断 JY61P 串口, 开关型)
  *   ?       回传当前参数
@@ -32,6 +33,7 @@
 #include "uart_bluetooth.h"
 #include "odometry.h"
 #include "oled.h"
+#include "k230.h"
 #include "IOI2C.h"
 #include "bsp_motor_iic.h"
 #include "motor_iic.h"
@@ -47,6 +49,7 @@ static uint8_t cmd_idx = 0;
 uint8_t g_mode      = 0;     /* 0=巡线, 1=空转, 3=不倒翁(IMU yaw自稳) */
 float   g_target_rpm = 200;  /* 空转目标速度 (驱动板单位) */
 uint8_t g_running    = 0;    /* 上电默认停止, 发 'g' 启动, 's' 停止 */
+uint8_t g_task_id    = 1;    /* 当前题目号 1~5 (H题: 1=图传 2=循线一圈 3=静止控球 4=A→B 5=一圈稳球 6=任意位置) */
 
 /* 驱动板 PID 缓存 (cmd修改后发给驱动板) */
 static float drv_kp = 0.8f;
@@ -190,14 +193,14 @@ static void CMD_Exec(void)
         break;
     case '?':
         snprintf(ack, sizeof(ack),
-                 "[MSPM0] ? mode=%d run=%d base=%.1f p=%.2f d=%.2f pivot=%.1f fwd=%.0f target=%.1f\n"
+                 "[MSPM0] ? task=%d mode=%d run=%d base=%.1f p=%.2f d=%.2f pivot=%.1f fwd=%.0f target=%.1f\n"
                  "       yaw=%.2f target=%.2f err=%.2f assist=%d x=%.0f y=%.0f total=%.0f edge=%d\n"
-                 "       imu=%d oled=%d use_imu=%d laps=%d/%d (1=present,0=not)\n",
-                 g_mode, g_running, g_track_cfg.base_speed, g_track_cfg.turn_p, g_track_cfg.turn_d,
+                 "       imu=%d oled=%d k230=%d use_imu=%d laps=%d/%d (1=present,0=not)\n",
+                 g_task_id, g_mode, g_running, g_track_cfg.base_speed, g_track_cfg.turn_p, g_track_cfg.turn_d,
                  g_track_cfg.pivot_speed, g_track_cfg.corner_fwd_ms, g_target_rpm,
                  IMU_Get_Yaw_Cached(), g_yaw_target, g_yaw_err, g_imu_assist,
                  Odom_Get_X(), Odom_Get_Y(), Odom_Get_Total_Dist(), Odom_Get_Edge_Index(),
-                 g_imu.present, g_oled_present, g_imu.use_imu, g_current_lap, g_target_laps);
+                 g_imu.present, g_oled_present, g_k230.present, g_imu.use_imu, g_current_lap, g_target_laps);
         CMD_SendText(ack);
         CMD_Report();   /* 同时发 JustFloat 帧 */
         break;
@@ -330,6 +333,27 @@ static void CMD_Exec(void)
         if (v > 9) v = 9;
         g_target_laps = (uint8_t)v;
         snprintf(ack, sizeof(ack), "[MSPM0] target_laps=%d\n", g_target_laps);
+        CMD_SendText(ack);
+        break;
+    case 'N':   /* 切换题目号 1~5 (H题): N3=第3题, N无参数=下一题 */
+        if (cmd_idx == 1) {
+            /* 无参数: 下一题 1→2→...→5→1 */
+            g_task_id = (g_task_id >= 5) ? 1 : (g_task_id + 1);
+        } else {
+            /* 有参数: 直接设 */
+            if (v < 1) v = 1;
+            if (v > 5) v = 5;
+            g_task_id = (uint8_t)v;
+        }
+        /* 同步 OLED 显示 */
+        if (g_oled_present) {
+            OLED_ClearArea(0, 0, 16);
+            OLED_PrintfAt(0, 0, "Task: %d", g_task_id);
+            OLED_PrintfAt(1, 0, "Task: %d %s", g_task_id, g_running ? "RUN " : "STOP");
+        }
+        /* 发题号给 K230 */
+        K230_SendTask(g_task_id);
+        snprintf(ack, sizeof(ack), "[MSPM0] task=%d (1=图传 2=循线 3=控球 4=AB 5=一圈 6=任意)\n", g_task_id);
         CMD_SendText(ack);
         break;
     case 'U':   /* (已移除) 原 IMU 串口原始字节回显, ISR 直解析方案下不再支持 */

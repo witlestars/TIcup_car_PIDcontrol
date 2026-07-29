@@ -11,7 +11,7 @@
 #include "BSP/template/cmd.h"
 #include "BSP/template/uart_bluetooth.h"
 #include "BSP/imu.h"
-#include "BSP/lora.h"
+/* #include "BSP/lora.h" */   /* LoRa 禁用 (H题不需要, UART_LORA 复用给 K230) */
 #include "BSP/k230.h"
 #include "BSP/odometry.h"
 #include "BSP/oled.h"
@@ -71,28 +71,30 @@ int main(void)
     CMD_SendText("[MSPM0] init: imu\n");
     CMD_SendText(IMU_Init() == 0 ? "[MSPM0] IMU JY61P OK\n" : "[MSPM0] IMU JY61P FAIL\n");
 
-    /* LoRa: UART_LORA 9600bps 透明传输, 等500ms冷启动, 启用RX中断 */
-    delay_ms(500);
-    LORA_Init();
-    LORA_EnableRxIRQ();
-    CMD_SendText("[MSPM0] init: lora\n");
+    /* LoRa: 已禁用 (H题不需要, UART_LORA 复用给 K230 双向通信)
+     * 如需恢复: 取消 lora.c 的 #if 0, 删除 k230.c 的 UART_LORA_INST_IRQHandler */
+    /* delay_ms(500); LORA_Init(); LORA_EnableRxIRQ(); CMD_SendText("[MSPM0] init: lora\n"); */
 
     CMD_SendText("[MSPM0] init: odom\n");   Odom_Init();
     CMD_SendText("[MSPM0] init: oled\n");   OLED_Init();
     if (g_oled_present) {
         OLED_Clear();
-        OLED_PrintfAt(0, 0, "==TI CUP==");
-        OLED_PrintfAt(1, 0, "ready");
+        OLED_PrintfAt(0, 0, "==TI CUP H==");
+        OLED_PrintfAt(1, 0, "Task: %d STOP", g_task_id);
     }
 
     CMD_SendText("[MSPM0] init: button\n"); Button_Init();
-    CMD_SendText("[MSPM0] init: k230\n");   K230_Init();
+    /* K230: 复用 UART_LORA (PB15/PB16), 等500ms冷启动, 启用RX中断 */
+    delay_ms(500);
+    CMD_SendText("[MSPM0] init: k230\n");   K230_Init();  K230_EnableRxIRQ();
+    /* 上电发题号给 K230 (通知当前题目) */
+    K230_SendTask(g_task_id);
     CMD_SendText("[MSPM0] init done\n");
 
     uint32_t last_10ms = 0;
     while (1) {
         CMD_Poll();
-        LORA_Poll();
+        /* LORA_Poll(); */   /* LoRa 禁用, K230 接管 UART_LORA */
         /* IMU 帧 ISR 内直接解析, 无需主循环 polling */
 
         /* 10ms 节拍: 按钮 + 模式分发 + 电机指令 */
