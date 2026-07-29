@@ -1,6 +1,8 @@
 #ifndef TASK_H
 #define TASK_H
 
+#include <stdint.h>
+
 typedef enum{
     Chassis_stop = 0,   // 停止
     A_to_B,             // A点到B点
@@ -14,11 +16,13 @@ typedef enum{
     Balance_2,      // 锁定任意位置
 } BalanceTask_e;
 
-extern ChassisTask_e g_chassis_task;
-extern BalanceTask_e g_balance_task;
+extern volatile bool g_running;          // 小车运行标志位
+
+extern volatile ChassisTask_e g_chassis_task;
+extern volatile BalanceTask_e g_balance_task;
 
 
-void Balance_Task(BalanceTask_e task);
-void Chassis_Task(ChassisTask_e task);
-
+void Balance_Task();
+void Chassis_Task();
+void OLED_Task();
 #endif /* TASK_H */

@@ -34,7 +34,7 @@ void Odom_Reset(void)
 {
     s_x = 0;
     s_y = 0;
-    s_theta = IMU_Get_Yaw_Cached();   /* 朝向 = 当前yaw */
+    s_theta = g_imu_data.Yaw;   /* 朝向 = 当前yaw */
     s_total_dist = 0;
     s_edge_dist = 0;
     s_edge_idx = 0;
@@ -67,7 +67,7 @@ float Odom_Update(void)
     float d_c = (d_l + d_r) * 0.5f;
 
     /* 4. 朝向: 直接用IMU的yaw (比编码器差速准) */
-    s_theta = IMU_Get_Yaw_Cached();
+    s_theta = g_imu_data.Yaw;
 
     /* 5. 位置积分 (theta转弧度) */
     float theta_rad = s_theta * (float)M_PI / 180.0f;

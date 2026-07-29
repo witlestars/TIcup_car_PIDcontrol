@@ -5,7 +5,8 @@
 
 #include "balance.h"
 #include "ti_msp_dl_config.h"  // 必须引入，为了使用 UART_Motor_INST 和 DMA_CH0_CHAN_ID
-#include "ZDT_X42S_Driver.h"   // 引入电机驱动底层[cite: 1]
+#include "ZDT_X42S_Driver.h"   // 引入电机驱动底层
+#include "delay.h"             // delay_ms / delay_us
 
 /* ================== 私有变量 ================== */
 /* 将步进电机实例完全封装在本文件中，对外隐藏[cite: 1] */
@@ -25,11 +26,11 @@ void Balance_Init(void)
     ZDT_Motor_Init(&balance_motor, UART_Motor_INST, DMA_CH0_CHAN_ID, 1);
 
     /* 上电延时 500ms 等待电机驱动板就绪[cite: 1] */
-    delay_cycles(32000 * 500); 
+    delay_ms(500);
 
     /* 使能电机锁轴[cite: 1] */
     ZDT_Motor_Enable(&balance_motor, true);
-    delay_cycles(32000 * 10); 
+    delay_ms(500);
 
 
     /* ------ 2. PID 参数初始化部分 ------ */
