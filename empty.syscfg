@@ -22,6 +22,7 @@ const GPIO7    = GPIO.addInstance();
 const GPIO8    = GPIO.addInstance();
 const GPIO9    = GPIO.addInstance();
 const SYSCTL   = scripting.addModule("/ti/driverlib/SYSCTL");
+const SYSTICK  = scripting.addModule("/ti/driverlib/SYSTICK");
 const TIMER    = scripting.addModule("/ti/driverlib/TIMER", {}, false);
 const TIMER1   = TIMER.addInstance();
 const UART     = scripting.addModule("/ti/driverlib/UART", {}, false);
@@ -168,18 +169,20 @@ GPIO8.associatedPins[1].assignedPin  = "12";
 GPIO8.associatedPins[1].initialValue = "SET";
 GPIO8.associatedPins[1].pin.$assign  = "PB12";
 
-/* GPIO_K230: K230 视觉模块信号引脚 (K230→MSPM0, 拉高=检测到钢珠)
- * PA14 空闲, 轮询读取 (不用中断, 避免与 button.c 的 GROUP1 冲突) */
-GPIO9.$name                          = "GPIO_K230";
-GPIO9.associatedPins.create(1);
-GPIO9.associatedPins[0].$name        = "K230_SIG";
-GPIO9.associatedPins[0].direction    = "INPUT";
+GPIO9.$name                              = "GPIO_K230";
+GPIO9.associatedPins[0].$name            = "K230_SIG";
+GPIO9.associatedPins[0].direction        = "INPUT";
 GPIO9.associatedPins[0].internalResistor = "PULL_DOWN";
-GPIO9.associatedPins[0].assignedPort = "PORTA";
-GPIO9.associatedPins[0].assignedPin  = "14";
-GPIO9.associatedPins[0].pin.$assign  = "PA14";
+GPIO9.associatedPins[0].assignedPort     = "PORTA";
+GPIO9.associatedPins[0].assignedPin      = "14";
+GPIO9.associatedPins[0].pin.$assign      = "PA14";
 
 SYSCTL.clockTreeEn = true;
+
+SYSTICK.periodEnable    = true;
+SYSTICK.period          = 32000;
+SYSTICK.interruptEnable = true;
+SYSTICK.systickEnable   = true;
 
 TIMER1.timerClkPrescale = 5;
 TIMER1.timerMode        = "PERIODIC";
@@ -222,13 +225,11 @@ UART2.rxPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
 UART2.rxPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric7";
 UART2.rxPinConfig.enableConfig         = true;
 
-/* UART_LORA: 大夏龙雀 DX-LR22-433T22D LoRa 模块, 9600bps 8N1 透明传输
- * 引脚: PB15=TX, PB16=RX (硬件 UART2 外设, PINCM32/PINCM33) */
-UART3.$name                            = "UART_LORA";
-UART3.targetBaudRate                   = 9600;
 UART3.enableFIFO                       = true;
 UART3.txFifoThreshold                  = "DL_UART_TX_FIFO_LEVEL_1_4_EMPTY";
-UART3.enabledInterrupts                = ["RX"];
+UART3.$name                            = "UART_Motor";
+UART3.targetBaudRate                   = 115200;
+UART3.enabledDMATXTriggers             = "DL_UART_DMA_INTERRUPT_TX";
 UART3.peripheral.rxPin.$assign         = "PB16";
 UART3.peripheral.txPin.$assign         = "PB15";
 UART3.txPinConfig.direction            = scripting.forceWrite("OUTPUT");
@@ -239,22 +240,27 @@ UART3.txPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric8";
 UART3.txPinConfig.enableConfig         = true;
 UART3.rxPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 UART3.rxPinConfig.onlyInternalResistor = scripting.forceWrite(false);
-UART3.rxPinConfig.internalResistor     = "PULL_UP";   /* RX 内部上拉, 防止未接 LoRa 时浮动捡噪声 */
 UART3.rxPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+UART3.rxPinConfig.internalResistor     = "PULL_UP";
 UART3.rxPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric9";
 UART3.rxPinConfig.enableConfig         = true;
+UART3.DMA_CHANNEL_TX.$name             = "DMA_CH0";
+UART3.DMA_CHANNEL_TX.addressMode       = "b2f";
+UART3.DMA_CHANNEL_TX.srcLength         = "BYTE";
+UART3.DMA_CHANNEL_TX.dstLength         = "BYTE";
 
 /**
  * Pinmux solution for unlocked pins/peripherals. This ensures that minor changes to the automatic solver in a future
  * version of the tool will not impact the pinmux you originally saw.  These lines can be completely deleted in order to
  * re-solve from scratch.
  */
-CAPTURE1.peripheral.$suggestSolution         = "TIMA1";
-CAPTURE1.peripheral.ccp0Pin.$suggestSolution = "PA28";
-Board.peripheral.$suggestSolution            = "DEBUGSS";
-Board.peripheral.swclkPin.$suggestSolution   = "PA20";
-Board.peripheral.swdioPin.$suggestSolution   = "PA19";
-TIMER1.peripheral.$suggestSolution           = "TIMA0";
-UART1.peripheral.$suggestSolution            = "UART0";
-UART2.peripheral.$suggestSolution            = "UART1";
-UART3.peripheral.$suggestSolution            = "UART2";
+CAPTURE1.peripheral.$suggestSolution             = "TIMA1";
+CAPTURE1.peripheral.ccp0Pin.$suggestSolution     = "PA28";
+Board.peripheral.$suggestSolution                = "DEBUGSS";
+Board.peripheral.swclkPin.$suggestSolution       = "PA20";
+Board.peripheral.swdioPin.$suggestSolution       = "PA19";
+TIMER1.peripheral.$suggestSolution               = "TIMA0";
+UART1.peripheral.$suggestSolution                = "UART0";
+UART2.peripheral.$suggestSolution                = "UART1";
+UART3.peripheral.$suggestSolution                = "UART2";
+UART3.DMA_CHANNEL_TX.peripheral.$suggestSolution = "DMA_CH0";

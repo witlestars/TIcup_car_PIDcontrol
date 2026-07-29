@@ -1,160 +1,84 @@
-/**
- * @file    imu.c
- * @brief   维特智能 JY61P 串口驱动 (UART_IMU, 9600bps, PA10/PA11)
- *          ISR 内直接解析帧 (无环形缓冲, 借鉴队友方案)
- *
- * 帧格式 (11字节): [0x55][TYPE][D0..D7][SUM]
- *   TYPE=0x51 加速度(/32768*16=g) 0x52 角速度(/32768*2000=°/s) 0x53 角度(/32768*180=度)
- *   SUM=(0x55+TYPE+ΣD0..D7)&0xFF 严格校验
- *
- * 教训/历程见 DEVELOPMENT_NOTES.txt
- */
-
 #include "imu.h"
-#include "delay.h"
-#include "ti_msp_dl_config.h"
+#include "ti_msp_dl_config.h" // 包含 MSPM0 库头文件
 
-/* ─── 缓存数据 (解析后自动更新) ─── */
-imu_state_t g_imu = { .present = 0, .use_imu = 1 };
+/* 定义全局 IMU 数据结构体 */
+volatile IMU_Data_t g_imu_data = {0};
 
-/* ─── 帧解析状态机 (ISR 内运行, 静态变量) ─── */
-typedef enum { PS_FIND_55, PS_TYPE, PS_DATA, PS_SUM } parse_state_t;
-static parse_state_t s_state = PS_FIND_55;
-static uint8_t s_frame_type, s_data_idx, s_data_buf[8], s_sum;
-
-/* ═══════════════ UART 层: ISR + 中断使能 + 收发字节 ═══════════════ */
-
-void IMU_EnableRxIRQ(void)
+/**
+ * @brief  IMU 模块初始化 (软件层面)
+ * @note   硬件 UART 初始化已由 SysConfig 自动生成的 SYSCFG_DL_init() 完成
+ */
+void IMU_Init(void)
 {
-    NVIC_ClearPendingIRQ(UART_IMU_INST_INT_IRQN);
-    DL_UART_Main_enableInterrupt(UART_IMU_INST,
-        DL_UART_MAIN_INTERRUPT_RX | DL_UART_MAIN_INTERRUPT_OVERRUN_ERROR);
+    // 初始化清零数据
+    g_imu_data.Roll = 0.0f;
+    g_imu_data.Pitch = 0.0f;
+    g_imu_data.Yaw = 0.0f;
+    g_imu_data.update_flag = 0;
+    // 使能 UART 接收中断，确保接收到的字节能触发中断并调用解析函数
     NVIC_EnableIRQ(UART_IMU_INST_INT_IRQN);
 }
 
-/* ISR 内单字节解析 (借鉴队友方案: ISR 直接喂状态机, 无环形缓冲) */
-static void IMU_UART_ParseByte(uint8_t b)
+/**
+ * @brief  IMU 串口数据解析函数 (状态机)
+ * @param  rx_byte: 串口单次接收到的 1 个字节数据
+ * @note   !!! 此函数必须放置在 UART 接收中断服务函数 (RX ISR) 内部运行 !!!
+ */
+void IMU_UART_ParseByte(uint8_t rx_byte)
 {
-    switch (s_state) {
-    case PS_FIND_55:
-        if (b == 0x55) { s_sum = 0x55; s_state = PS_TYPE; }
-        break;
-    case PS_TYPE:
-        s_sum += b; s_frame_type = b; s_data_idx = 0; s_state = PS_DATA;
-        break;
-    case PS_DATA:
-        s_data_buf[s_data_idx++] = b; s_sum += b;
-        if (s_data_idx >= 8) s_state = PS_SUM;
-        break;
-    case PS_SUM:
-        if (b == (uint8_t)(s_sum & 0xFF)) {
-            int16_t r0 = (int16_t)(((uint16_t)s_data_buf[1] << 8) | s_data_buf[0]);
-            int16_t r1 = (int16_t)(((uint16_t)s_data_buf[3] << 8) | s_data_buf[2]);
-            int16_t r2 = (int16_t)(((uint16_t)s_data_buf[5] << 8) | s_data_buf[4]);
-            if (s_frame_type == 0x53) {
-                g_imu.roll  = (float)r0 / 32768.0f * 180.0f;
-                g_imu.pitch = (float)r1 / 32768.0f * 180.0f;
-                g_imu.yaw   = (float)r2 / 32768.0f * 180.0f;
-                g_imu.present = 1;
-            } else if (s_frame_type == 0x52) {
-                g_imu.gyrox = (float)r0 / 32768.0f * 2000.0f;
-                g_imu.gyroy = (float)r1 / 32768.0f * 2000.0f;
-                g_imu.gyroz = (float)r2 / 32768.0f * 2000.0f;
-            } else if (s_frame_type == 0x51) {
-                g_imu.accx = (float)r0 / 32768.0f * 16.0f;
-                g_imu.accy = (float)r1 / 32768.0f * 16.0f;
-                g_imu.accz = (float)r2 / 32768.0f * 16.0f;
+    static uint8_t rx_buffer[11]; // 静态数组，用于存放一帧 11 字节的数据
+    static uint8_t rx_cnt = 0;    // 接收计数器（状态机状态）
+    
+    // 状态 0：寻找帧头 0x55
+    if (rx_cnt == 0) {
+        if (rx_byte == 0x55) {
+            rx_buffer[0] = rx_byte;
+            rx_cnt = 1; 
+        }
+    } 
+    // 状态 1：接收剩余的 10 个字节
+    else {
+        rx_buffer[rx_cnt] = rx_byte;
+        rx_cnt++;
+        
+        // 当收满 11 个字节时，进行校验和解析
+        if (rx_cnt == 11) {
+            uint8_t checksum = 0;
+            
+            // JY61P 校验和算法：前 10 个字节相加，保留低 8 位
+            for (int i = 0; i < 10; i++) {
+                checksum += rx_buffer[i];
             }
+            
+            // 校验和匹配，数据有效
+            if (checksum == rx_buffer[10]) {
+                
+                // 1. 解析角度包 (0x53)
+                if (rx_buffer[1] == 0x53) {
+                    g_imu_data.Roll  = ((int16_t)(rx_buffer[3] << 8 | rx_buffer[2])) / 32768.0f * 180.0f;
+                    g_imu_data.Pitch = ((int16_t)(rx_buffer[5] << 8 | rx_buffer[4])) / 32768.0f * 180.0f;
+                    g_imu_data.Yaw   = ((int16_t)(rx_buffer[7] << 8 | rx_buffer[6])) / 32768.0f * 180.0f;
+                    
+                    // 标记角度数据已更新，主循环 PID 可根据此标志位进行控制
+                    g_imu_data.update_flag = 1;
+                }
+                // 2. 解析角速度包 (0x52) - JY61P 量程默认 2000 °/s
+                else if (rx_buffer[1] == 0x52) {
+                    g_imu_data.GyroX = ((int16_t)(rx_buffer[3] << 8 | rx_buffer[2])) / 32768.0f * 2000.0f;
+                    g_imu_data.GyroY = ((int16_t)(rx_buffer[5] << 8 | rx_buffer[4])) / 32768.0f * 2000.0f;
+                    g_imu_data.GyroZ = ((int16_t)(rx_buffer[7] << 8 | rx_buffer[6])) / 32768.0f * 2000.0f;
+                }
+                // 3. 解析加速度包 (0x51) - JY61P 量程默认 16g
+                else if (rx_buffer[1] == 0x51) {
+                    g_imu_data.AccX  = ((int16_t)(rx_buffer[3] << 8 | rx_buffer[2])) / 32768.0f * 16.0f;
+                    g_imu_data.AccY  = ((int16_t)(rx_buffer[5] << 8 | rx_buffer[4])) / 32768.0f * 16.0f;
+                    g_imu_data.AccZ  = ((int16_t)(rx_buffer[7] << 8 | rx_buffer[6])) / 32768.0f * 16.0f;
+                }
+            }
+            
+            // 一帧处理完毕（无论校验成功与否），计数器归零，准备接收下一帧的 0x55
+            rx_cnt = 0; 
         }
-        s_state = PS_FIND_55;
-        break;
-    default:
-        s_state = PS_FIND_55;
-        break;
     }
 }
 
-// 中断函数
-void UART_IMU_INST_IRQHandler(void)
-{
-    // 获取当前触发的是什么中断
-    uint32_t pending_irq = DL_UART_Main_getPendingInterrupt(UART_IMU_INST);
-    // 正常的接收中断
-    if (pending_irq == DL_UART_IIDX_RX) 
-    {
-        // 只要 FIFO 里有数据，就一直读，防止残留数据导致堵塞
-        while (DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST) == false) 
-        {
-            uint8_t rx_data = DL_UART_Main_receiveData(UART_IMU_INST);
-            IMU_UART_ParseByte(rx_data);
-        }
-    }
-    // 溢出、帧错误、校验错误
-    else if ((pending_irq == DL_UART_IIDX_OVERRUN_ERROR) ||
-             (pending_irq == DL_UART_IIDX_BREAK_ERROR) ||
-             (pending_irq == DL_UART_IIDX_FRAMING_ERROR) ||
-             (pending_irq == DL_UART_IIDX_PARITY_ERROR))
-    {
-        // 发生错误时，必须清除标志位防止死锁！
-        DL_UART_Main_clearInterruptStatus(UART_IMU_INST, 
-            (DL_UART_INTERRUPT_OVERRUN_ERROR | 
-             DL_UART_INTERRUPT_BREAK_ERROR | 
-             DL_UART_INTERRUPT_FRAMING_ERROR | 
-             DL_UART_INTERRUPT_PARITY_ERROR));
-    }
-}
-
-/* 发 N 字节给 JY61P (归零/解锁/保存命令: 0xFF 0xAA REG VAL_LO VAL_HI) */
-void IMU_SendBytes(const uint8_t *data, uint8_t len)
-{
-    for (uint8_t i = 0; i < len; i++) {
-        uint16_t timeout = 60000;
-        while (DL_UART_Main_isTXFIFOFull(UART_IMU_INST) && timeout--);
-        if (timeout == 0) break;
-        DL_UART_Main_transmitDataBlocking(UART_IMU_INST, data[i]);
-    }
-}
-
-/* ═══════════════ 对外 API ═══════════════ */
-
-/* 等 1000ms 看是否收到 JY61P 帧, 返回0=成功
- * 内部先启用 RX 中断 (NVIC + 外设级 RX/OVERRUN), 再 polling 等 present */
-uint8_t IMU_Init(void)
-{
-    if (!g_imu.use_imu) { g_imu.present = 0; return 0xFF; }
-    IMU_EnableRxIRQ();   /* 启用 UART_IMU RX 中断 (NVIC_EnableIRQ + RX|OVERRUN) */
-    s_state = PS_FIND_55; s_data_idx = 0; g_imu.present = 0;
-    while (!DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST)) {
-        (void)DL_UART_Main_receiveData(UART_IMU_INST);
-    }
-    for (uint16_t i = 0; i < 200; i++) {
-        delay_ms(5);
-        if (g_imu.present) return 0;
-    }
-    return 0x01;
-}
-
-uint8_t IMU_Read_RPY(float *roll, float *pitch, float *yaw)
-{
-    if (roll)  *roll  = g_imu.roll;
-    if (pitch) *pitch = g_imu.pitch;
-    if (yaw)   *yaw   = g_imu.yaw;
-    return (g_imu.present && g_imu.use_imu) ? 0 : 1;
-}
-
-float IMU_Read_Yaw(void) { return g_imu.yaw; }
-
-/* Z轴归零: 解锁→归零→保存 (内部 600ms delay, 不要在 ISR 内调) */
-uint8_t IMU_Calibrate_Z(void)
-{
-    static const uint8_t unlock[] = {0xFF, 0xAA, 0x69, 0x88, 0xB5};
-    static const uint8_t calib[] = {0xFF, 0xAA, 0x76, 0x00, 0x00};
-    static const uint8_t save[]  = {0xFF, 0xAA, 0x00, 0x00, 0x00};
-    IMU_SendBytes(unlock, 5); delay_ms(200);
-    IMU_SendBytes(calib, 5); delay_ms(200);
-    IMU_SendBytes(save,  5); delay_ms(200);
-    g_imu.yaw = 0.0f;
-    return 0;
-}
-
-float IMU_Get_Yaw_Cached(void) { return g_imu.yaw; }

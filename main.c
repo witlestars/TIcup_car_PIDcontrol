@@ -1,114 +1,72 @@
 /**
  * @file    main.c
- * @brief   巡线小车主程序 — MSPM0G3507 + 四路驱动板
- *          灰度巡线 + IMU + 编码器里程 + 蓝牙调参
- *          非阻塞调度: IMU解析每轮 + 巡线/电机/按钮 10ms
+ * @brief   板球系统主程序
  */
 
 #include "ti_msp_dl_config.h"
-#include "BSP/track.h"
-#include "BSP/template/motor.h"
-#include "BSP/template/cmd.h"
-#include "BSP/template/uart_bluetooth.h"
-#include "BSP/imu.h"
-#include "BSP/lora.h"
-#include "BSP/k230.h"
-#include "BSP/odometry.h"
-#include "BSP/oled.h"
-#include "BSP/button.h"
-#include "delay.h"
+#include "balance.h"
 
-/* SysTick 1ms 时基 (非阻塞调度用; delay.c 用 delay_cycles 不冲突) */
+/* SysTick 1ms 时基[cite: 2] */
 volatile uint32_t g_sys_tick = 0;
 void SysTick_Handler(void) { g_sys_tick++; }
 
-/* IMU 解析启用/暂停切换 (按钮和 'E' 命令共用; IMU已改串口, 与OLED不互斥) */
-void switch_mode(uint8_t use_imu)
-{
-    g_imu.use_imu = use_imu;
-    CMD_SendText(use_imu ? "[MSPM0] IMU enabled (parsing on)\n"
-                         : "[MSPM0] IMU paused (parsing off)\n");
-}
-
-/* 运行模式分发: 按 g_mode 调对应模块, 设置 g_motor_l/r_speed
- *  mode 0=巡线  1=空转  3=正方形/T命令 */
-static void Mode_RunStep(void)
-{
-    if (!g_running) {
-        g_motor.l = 0; g_motor.r = 0;
-        return;
-    }
-    switch (g_mode) {
-    case 0:
-        Track_Loop();
-        /* m0 巡线不调 Odom_Update: 巡线只用灰度+IMU, 无需里程计
-         * Odom_Update 会触发 4 次 I2C 读编码器, 与 Motor_Send_Speed 的 I2C 写
-         * 挤在同一 10ms 窗口, ISR 打断软件 I2C 时序导致驱动板卡死 */
-        break;
-    case 3:
-        Square_Loop();
-        Odom_Update();   /* m3 正方形模式才需要里程计 (走固定距离) */
-        break;
-    default:   /* mode 1 空转 */
-        g_motor.l = (int16_t)g_target_rpm;
-        g_motor.r = (int16_t)g_target_rpm;
-        break;
-    }
-}
-
 int main(void)
 {
+    /* 1. 初始化系统外设[cite: 2] */
     SYSCFG_DL_init();
-    SysTick_Config(32000);   /* 1ms 时基 (32MHz/1000) */
+    
+    /* 2. 使能全局中断[cite: 2] */
+    __enable_irq();
 
-    CMD_SendText("[MSPM0] init: track\n");  Track_Init();
-    CMD_SendText("[MSPM0] init: cmd\n");    CMD_Init();
-    CMD_SendText("[MSPM0] init: motor\n");  Motor_Init();
-
-    /* IMU: UART_IMU 9600bps, 等500ms让JY61P冷启动
-     * IMU_Init 内部会调用 IMU_EnableRxIRQ 开启 RX 中断 */
-    delay_ms(500);
-    CMD_SendText("[MSPM0] init: imu\n");
-    CMD_SendText(IMU_Init() == 0 ? "[MSPM0] IMU JY61P OK\n" : "[MSPM0] IMU JY61P FAIL\n");
-
-    /* LoRa: UART_LORA 9600bps 透明传输, 等500ms冷启动, 启用RX中断 */
-    delay_ms(500);
-    LORA_Init();
-    LORA_EnableRxIRQ();
-    CMD_SendText("[MSPM0] init: lora\n");
-
-    CMD_SendText("[MSPM0] init: odom\n");   Odom_Init();
-    CMD_SendText("[MSPM0] init: oled\n");   OLED_Init();
-    if (g_oled_present) {
-        OLED_Clear();
-        OLED_PrintfAt(0, 0, "==TI CUP==");
-        OLED_PrintfAt(1, 0, "ready");
-    }
-
-    CMD_SendText("[MSPM0] init: button\n"); Button_Init();
-    CMD_SendText("[MSPM0] init: k230\n");   K230_Init();
-    CMD_SendText("[MSPM0] init done\n");
+    /* 3. 初始化平衡控制系统 (内部会自动完成步进电机的初始化和使能) */
+    Balance_Init();
 
     uint32_t last_10ms = 0;
-    while (1) {
-        CMD_Poll();
-        LORA_Poll();
-        /* IMU 帧 ISR 内直接解析, 无需主循环 polling */
+    
+    ///////////////////* 主循环中只应出现task函数 *///////////////////
 
-        /* 10ms 节拍: 按钮 + 模式分发 + 电机指令 */
+    while (1) {
+        /* 10ms 控制节拍 */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10) {
             last_10ms = g_sys_tick;
 
-            Button_HandleEvents();   /* ISR 设标志, 这里执行业务 */
-            K230_Poll();             /* 轮询 K230 视觉信号 (10ms) */
+            /* 执行循迹 PID 控制任务 */
+            
 
-            if (g_laps_done && g_running) {
-                g_running = 0; Motor_Stop();
-                CMD_SendText("[MSPM0] LAPS DONE! auto-stop\n");
-            }
-
-            Mode_RunStep();          /* 按当前模式驱动电机 */
-            Motor_Send_Speed(0, -g_motor.r, 0, -g_motor.l);
+            /* 执行平衡 PID 控制任务 */
+            // Balance_Task(target_pos, current_pos,小车前向加速度前馈);
         }
+    }
+}
+
+///////////////////* 需要中断运行的任务函数统一写在后面 *///////////////////
+
+// IMU数据解析任务   数据更新在全局变量g_imu_data中
+void UART_IMU_INST_IRQHandler(void)
+{
+    // 获取当前触发的是什么中断
+    uint32_t pending_irq = DL_UART_Main_getPendingInterrupt(UART_IMU_INST);
+    // 正常的接收中断
+    if (pending_irq == DL_UART_IIDX_RX) 
+    {
+        // 只要 FIFO 里有数据，就一直读，防止残留数据导致堵塞
+        while (DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST) == false) 
+        {
+            uint8_t rx_data = DL_UART_Main_receiveData(UART_IMU_INST);
+            IMU_UART_ParseByte(rx_data);
+        }
+    }
+    // 溢出、帧错误、校验错误
+    else if ((pending_irq == DL_UART_IIDX_OVERRUN_ERROR) ||
+             (pending_irq == DL_UART_IIDX_BREAK_ERROR) ||
+             (pending_irq == DL_UART_IIDX_FRAMING_ERROR) ||
+             (pending_irq == DL_UART_IIDX_PARITY_ERROR))
+    {
+        // 发生错误时，必须清除标志位防止死锁！
+        DL_UART_Main_clearInterruptStatus(UART_IMU_INST, 
+            (DL_UART_INTERRUPT_OVERRUN_ERROR | 
+             DL_UART_INTERRUPT_BREAK_ERROR | 
+             DL_UART_INTERRUPT_FRAMING_ERROR | 
+             DL_UART_INTERRUPT_PARITY_ERROR));
     }
 }
