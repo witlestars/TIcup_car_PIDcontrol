@@ -4,6 +4,7 @@
  */
 
 #include "ti_msp_dl_config.h"
+#include "task.h"
 #include "balance.h"
 
 /* SysTick 1ms 时基[cite: 2] */
@@ -23,18 +24,18 @@ int main(void)
 
     uint32_t last_10ms = 0;
     
-    ///////////////////* 主循环中只应出现task函数 *///////////////////
-
+    ///////////////////* 主循环中只应出现在task.c中定义的任务 *///////////////////
+        /* 先看task.c！！！！！其中已留好任务切换的标志位 */
     while (1) {
         /* 10ms 控制节拍 */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10) {
             last_10ms = g_sys_tick;
 
             /* 执行循迹 PID 控制任务 */
-            
+            Track_Loop();
 
             /* 执行平衡 PID 控制任务 */
-            // Balance_Task(target_pos, current_pos,小车前向加速度前馈);
+            // Balance_Task(g_balance_task);
         }
     }
 }
@@ -70,3 +71,88 @@ void UART_IMU_INST_IRQHandler(void)
              DL_UART_INTERRUPT_PARITY_ERROR));
     }
 }
+
+// 视觉数据解析任务   数据更新在全局变量g_vision中
+void UART_K230_INST_IRQHandler(void)
+{
+    // 获取当前触发的是什么中断
+    uint32_t pending_irq = DL_UART_Main_getPendingInterrupt(UART_K230_INST);
+    // 正常的接收中断
+    if (pending_irq == DL_UART_IIDX_RX) 
+    {
+        // 只要 FIFO 里有数据，就一直读，防止残留数据导致堵塞
+        while (DL_UART_Main_isRXFIFOEmpty(UART_K230_INST) == false) 
+        {
+            uint8_t rx_data = DL_UART_Main_receiveData(UART_K230_INST);
+            Vision_ParseByte(&g_vision, rx_data);
+        }
+    }
+    // 溢出、帧错误、校验错误
+    else if ((pending_irq == DL_UART_IIDX_OVERRUN_ERROR) ||
+             (pending_irq == DL_UART_IIDX_BREAK_ERROR) ||
+             (pending_irq == DL_UART_IIDX_FRAMING_ERROR) ||
+             (pending_irq == DL_UART_IIDX_PARITY_ERROR))
+    {
+        // 发生错误时，必须清除标志位防止死锁！
+        DL_UART_Main_clearInterruptStatus(UART_IMU_INST, 
+            (DL_UART_INTERRUPT_OVERRUN_ERROR | 
+             DL_UART_INTERRUPT_BREAK_ERROR | 
+             DL_UART_INTERRUPT_FRAMING_ERROR | 
+             DL_UART_INTERRUPT_PARITY_ERROR));
+    }
+}
+
+
+// 按键中断处理函数 (统一入口)
+/*
+    同过中断改变标志位，在主循环中传参来切换模式
+*/
+        /* 先看task.c！！！！！其中已留好任务切换的标志位 */
+#define DEBOUNCE_TIME_MS 20
+static uint32_t last_time = 0;
+// 这是 GPIO 统一的硬件中断入口函数
+void GROUP1_IRQHandler(void)
+{
+    // ====== 检查并处理 GPIOA 端口的按键 ======
+    uint32_t gpioA_status = DL_GPIO_getPendingInterrupt(GPIOA);
+    
+    if (gpioA_status == GPIO_BUTTON_BTN_START_IIDX) {
+        // ====== 防抖处理 ======
+        if ((g_sys_tick - last_time) > DEBOUNCE_TIME_MS) {
+            
+            // TODO:  BTN_START (启动) 代码
+            
+            // 更新最后一次触发的时间戳
+            last_time = g_sys_tick; 
+        }
+    }
+    else if (gpioA_status == GPIO_BUTTON_BTN_LAP_UP_IIDX) {
+        if ((g_sys_tick - last_time) > DEBOUNCE_TIME_MS) {
+            
+            // TODO: BTN_LAP_UP (计圈/上) 代码
+            
+            last_time = g_sys_tick;
+        }
+    }
+
+    // ====== 检查并处理 GPIOB 端口的按键 ======
+    uint32_t gpioB_status = DL_GPIO_getPendingInterrupt(GPIOB);
+    
+    if (gpioB_status == GPIO_BUTTON_BTN_LAP_DN_IIDX) {
+        if ((g_sys_tick - last_time) > DEBOUNCE_TIME_MS) {
+            
+            // TODO: BTN_LAP_DN (计圈/下) 代码
+            
+            last_time = g_sys_tick;
+        }
+    }
+    else if (gpioB_status == GPIO_BUTTON_BTN_RESET_IIDX) {
+        if ((g_sys_tick - last_time) > DEBOUNCE_TIME_MS) {
+            
+            // TODO: BTN_RESET (复位) 代码
+            
+            last_time = g_sys_tick;
+        }
+    }
+}
+

@@ -38,7 +38,7 @@ void Balance_Init(void);
  * @param  current_pos 视觉模块反馈的小球当前位置
  * @param  gyro_rate   陀螺仪当前输出的角速度 (例如绕横滚轴的角速度)
  */
-void Balance_Task(float target_pos, float current_pos, float gyro_rate);
+void Balance_PID(float target_pos, float current_pos, float gyro_rate);
 
 #ifdef __cplusplus
 }

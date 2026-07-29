@@ -33,15 +33,15 @@ void Balance_Init(void)
 
 
     /* ------ 2. PID 参数初始化部分 ------ */
-    g_balance_pid.Kp = 15.0f;[cite: 1]
-    g_balance_pid.Ki = 0.0f;[cite: 1]
-    g_balance_pid.Kd = 5.0f;[cite: 1]
+    g_balance_pid.Kp = 15.0f;
+    g_balance_pid.Ki = 0.0f;
+    g_balance_pid.Kd = 5.0f;
     
     /* 新增：前馈控制系数 (具体值需上板调试，通常与电机转速响应有关) */
     g_balance_pid.Kff = 2.5f; 
     
-    g_balance_pid.error_sum = 0.0f;[cite: 1]
-    g_balance_pid.last_error = 0.0f;[cite: 1]
+    g_balance_pid.error_sum = 0.0f;
+    g_balance_pid.last_error = 0.0f;
     
     g_balance_pid.out_max = 200.0f;      // 限速 200 RPM[cite: 1]
     g_balance_pid.integral_max = 50.0f;  // 积分限幅[cite: 1]
@@ -54,7 +54,7 @@ void Balance_Init(void)
  * @param gyro_rate 陀螺仪当前输出的角速度 (例如绕横滚轴的角速度)
  * @todo  无显性时间参，目前适配10ms周期，后续更改周期kikd需要修改[cite: 1]
  */
-void Balance_Task(float target_pos, float current_pos, float gyro_rate)
+void Balance_PID(float target_pos, float current_pos, float gyro_rate)
 {
     float error;
     float derivative;
