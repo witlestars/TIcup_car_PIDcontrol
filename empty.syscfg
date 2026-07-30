@@ -145,15 +145,20 @@ GPIO7.associatedPins[0].pin.$assign      = "PA14";
 I2C1.$name                             = "I2C_Motor";
 I2C1.basicEnableController             = true;
 I2C1.basicControllerStandardBusSpeed   = "Fast";
+I2C1.peripheral.$assign                = "I2C0";      /* 强制用 I2C0 外设 (非 suggest) */
+I2C1.peripheral.sdaPin.$assign         = "PA0";       /* 强制 SDA = PA0 (非 suggest) */
+I2C1.peripheral.sclPin.$assign         = "PA31";      /* 强制 SCL = PA31 (非 suggest) */
 I2C1.sdaPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric4";
 I2C1.sdaPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 I2C1.sdaPinConfig.onlyInternalResistor = scripting.forceWrite(false);
 I2C1.sdaPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+I2C1.sdaPinConfig.internalResistor     = "PULL_UP";   /* I2C 总线必须上拉 */
 I2C1.sdaPinConfig.enableConfig         = true;
 I2C1.sclPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric10";
 I2C1.sclPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 I2C1.sclPinConfig.onlyInternalResistor = scripting.forceWrite(false);
 I2C1.sclPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+I2C1.sclPinConfig.internalResistor     = "PULL_UP";   /* I2C 总线必须上拉 */
 I2C1.sclPinConfig.enableConfig         = true;
 
 SYSCTL.clockTreeEn = true;
@@ -263,9 +268,7 @@ GPIO6.associatedPins[0].pin.$suggestSolution     = "PA7";
 GPIO6.associatedPins[1].pin.$suggestSolution     = "PA18";
 GPIO6.associatedPins[2].pin.$suggestSolution     = "PB1";
 GPIO6.associatedPins[3].pin.$suggestSolution     = "PB14";
-I2C1.peripheral.$suggestSolution                 = "I2C0";
-I2C1.peripheral.sdaPin.$suggestSolution          = "PA0";
-I2C1.peripheral.sclPin.$suggestSolution          = "PA31";
+/* I2C1 已用 $assign 强制分配, 删除 suggestSolution 避免 SysConfig 求解器冲突 */
 TIMER1.peripheral.$suggestSolution               = "TIMA0";
 UART1.peripheral.$suggestSolution                = "UART0";
 UART2.peripheral.$suggestSolution                = "UART1";
