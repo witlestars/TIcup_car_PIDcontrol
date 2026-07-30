@@ -16,6 +16,9 @@
 #define __TRACK_H
 #include <stdint.h>
 
+#define TRACK_BASE_SPEED     200     /* 基础速度 (驱动板单位) */
+#define TRACK_TURN_GAIN_P    25.0f   /* 离心 P: 转向强度 */
+#define TRACK_TURN_GAIN_D    15.0f   /* 离心 D: 压低防反打 */
 #define TRACK_LOST_HOLD        25    /* 丢线保持周期 (25×10ms=250ms) */
 
 /* 运行时调参变量 (由 cmd.c 通过 UART 命令修改) */

@@ -25,7 +25,7 @@ int main(void)
     NVIC_EnableIRQ(GPIOB_INT_IRQn);
 
     /* 3.模块初始化 */
-    // IMU_Init();
+    IMU_Init();
     OLED_Init();
 
     /* 4. 初始化任务 (内部会自动完成底层里程计和电机的初始化和使能) */

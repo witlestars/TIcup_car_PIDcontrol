@@ -228,5 +228,5 @@ void Track_Loop(void)
     }
 
     /* ─── 6. 下发速度到驱动板 (M2=右轮, M4=左轮, M1/M3=0) ─── */
-    Motor_Send_Speed(0, g_motor.r, 0, g_motor.l);
+    Motor_Send_Speed(0, -g_motor.r, 0, -g_motor.l);
 }
