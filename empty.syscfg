@@ -152,13 +152,13 @@ I2C1.sdaPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric4";
 I2C1.sdaPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 I2C1.sdaPinConfig.onlyInternalResistor = scripting.forceWrite(false);
 I2C1.sdaPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
-I2C1.sdaPinConfig.internalResistor     = "PULL_UP";   /* I2C 总线必须上拉 */
+I2C1.sdaPinConfig.internalResistor     = "NONE";      /* Open Drain 模式禁用内部上拉, 需外部 4.7k-10k 上拉到 VCC */
 I2C1.sdaPinConfig.enableConfig         = true;
 I2C1.sclPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric10";
 I2C1.sclPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 I2C1.sclPinConfig.onlyInternalResistor = scripting.forceWrite(false);
 I2C1.sclPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
-I2C1.sclPinConfig.internalResistor     = "PULL_UP";   /* I2C 总线必须上拉 */
+I2C1.sclPinConfig.internalResistor     = "NONE";      /* Open Drain 模式禁用内部上拉, 需外部 4.7k-10k 上拉到 VCC */
 I2C1.sclPinConfig.enableConfig         = true;
 
 SYSCTL.clockTreeEn = true;
