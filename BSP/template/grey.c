@@ -61,7 +61,8 @@ static uint8_t Grey_Read_OUT(void)
  *   active_count >  6        → 全黑(传感器全在暗面), 丢线
  *   1 ≤ active_count ≤ 6     → 正常
  */
- static const float WEIGHTS[8] = {-5.0f, -2.5f, -1.0f, -0.3f, 0.3f, 1.0f, 2.5f, 5.0f};
+//  static const float WEIGHTS[8] = {-2.8f, -3.0f, -1.5f, -0.3f, 0.3f, 1.5f, 3.0f, 2.8f};
+static const float WEIGHTS[8] = {-2.0f, -1.5f, -1.0f, -0.5f, 0.5f, 1.0f, 1.5f, 2.0f};
 void Grey_Read(Grey_State_t *state)
 {
     if (state == NULL) return;
