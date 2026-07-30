@@ -19,7 +19,8 @@ const GPIO4    = GPIO.addInstance();
 const GPIO5    = GPIO.addInstance();
 const GPIO6    = GPIO.addInstance();
 const GPIO7    = GPIO.addInstance();
-const GPIO8    = GPIO.addInstance();
+const I2C      = scripting.addModule("/ti/driverlib/I2C", {}, false);
+const I2C1     = I2C.addInstance();
 const SYSCTL   = scripting.addModule("/ti/driverlib/SYSCTL");
 const SYSTICK  = scripting.addModule("/ti/driverlib/SYSTICK");
 const TIMER    = scripting.addModule("/ti/driverlib/TIMER", {}, false);
@@ -28,6 +29,7 @@ const UART     = scripting.addModule("/ti/driverlib/UART", {}, false);
 const UART1    = UART.addInstance();
 const UART2    = UART.addInstance();
 const UART3    = UART.addInstance();
+const UART4    = UART.addInstance();
 
 /**
  * Write custom configuration values to the imported modules.
@@ -132,26 +134,27 @@ GPIO6.associatedPins[3].polarity         = "FALL";
 GPIO6.associatedPins[3].inputFilter      = "8_CYCLES";
 GPIO6.associatedPins[3].$name            = "BTN_2";
 
-GPIO7.$name                          = "MOTOR_I2C";
-GPIO7.associatedPins.create(2);
-GPIO7.associatedPins[0].$name        = "MSDA";
-GPIO7.associatedPins[0].assignedPort = "PORTB";
-GPIO7.associatedPins[0].assignedPin  = "11";
-GPIO7.associatedPins[0].initialValue = "SET";
-GPIO7.associatedPins[0].pin.$assign  = "PB11";
-GPIO7.associatedPins[1].$name        = "MSCL";
-GPIO7.associatedPins[1].assignedPort = "PORTB";
-GPIO7.associatedPins[1].assignedPin  = "12";
-GPIO7.associatedPins[1].initialValue = "SET";
-GPIO7.associatedPins[1].pin.$assign  = "PB12";
+GPIO7.$name                              = "GPIO_K230";
+GPIO7.associatedPins[0].$name            = "K230_SIG";
+GPIO7.associatedPins[0].direction        = "INPUT";
+GPIO7.associatedPins[0].internalResistor = "PULL_DOWN";
+GPIO7.associatedPins[0].assignedPort     = "PORTA";
+GPIO7.associatedPins[0].assignedPin      = "14";
+GPIO7.associatedPins[0].pin.$assign      = "PA14";
 
-GPIO8.$name                              = "GPIO_K230";
-GPIO8.associatedPins[0].$name            = "K230_SIG";
-GPIO8.associatedPins[0].direction        = "INPUT";
-GPIO8.associatedPins[0].internalResistor = "PULL_DOWN";
-GPIO8.associatedPins[0].assignedPort     = "PORTA";
-GPIO8.associatedPins[0].assignedPin      = "14";
-GPIO8.associatedPins[0].pin.$assign      = "PA14";
+I2C1.$name                             = "I2C_Motor";
+I2C1.basicEnableController             = true;
+I2C1.basicControllerStandardBusSpeed   = "Fast";
+I2C1.sdaPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric4";
+I2C1.sdaPinConfig.hideOutputInversion  = scripting.forceWrite(false);
+I2C1.sdaPinConfig.onlyInternalResistor = scripting.forceWrite(false);
+I2C1.sdaPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+I2C1.sdaPinConfig.enableConfig         = true;
+I2C1.sclPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric10";
+I2C1.sclPinConfig.hideOutputInversion  = scripting.forceWrite(false);
+I2C1.sclPinConfig.onlyInternalResistor = scripting.forceWrite(false);
+I2C1.sclPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+I2C1.sclPinConfig.enableConfig         = true;
 
 SYSCTL.clockTreeEn = true;
 
@@ -227,6 +230,25 @@ UART3.DMA_CHANNEL_TX.addressMode       = "b2f";
 UART3.DMA_CHANNEL_TX.srcLength         = "BYTE";
 UART3.DMA_CHANNEL_TX.dstLength         = "BYTE";
 
+UART4.$name                            = "UART_VOFA";
+UART4.targetBaudRate                   = 115200;
+UART4.enabledInterrupts                = ["RX"];
+UART4.enabledDMATXTriggers             = "DL_UART_DMA_INTERRUPT_TX";
+UART4.txPinConfig.direction            = scripting.forceWrite("OUTPUT");
+UART4.txPinConfig.hideOutputInversion  = scripting.forceWrite(false);
+UART4.txPinConfig.onlyInternalResistor = scripting.forceWrite(false);
+UART4.txPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+UART4.txPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric0";
+UART4.rxPinConfig.hideOutputInversion  = scripting.forceWrite(false);
+UART4.rxPinConfig.onlyInternalResistor = scripting.forceWrite(false);
+UART4.rxPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+UART4.rxPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric2";
+UART4.DMA_CHANNEL_TX.$name             = "DMA_CH1";
+UART4.DMA_CHANNEL_TX.srcLength         = "BYTE";
+UART4.DMA_CHANNEL_TX.dstLength         = "BYTE";
+UART4.DMA_CHANNEL_TX.addressMode       = "b2f";
+UART4.DMA_CHANNEL_TX.enableInterrupt   = true;
+
 /**
  * Pinmux solution for unlocked pins/peripherals. This ensures that minor changes to the automatic solver in a future
  * version of the tool will not impact the pinmux you originally saw.  These lines can be completely deleted in order to
@@ -241,8 +263,15 @@ GPIO6.associatedPins[0].pin.$suggestSolution     = "PA7";
 GPIO6.associatedPins[1].pin.$suggestSolution     = "PA18";
 GPIO6.associatedPins[2].pin.$suggestSolution     = "PB1";
 GPIO6.associatedPins[3].pin.$suggestSolution     = "PB14";
+I2C1.peripheral.$suggestSolution                 = "I2C0";
+I2C1.peripheral.sdaPin.$suggestSolution          = "PA0";
+I2C1.peripheral.sclPin.$suggestSolution          = "PA31";
 TIMER1.peripheral.$suggestSolution               = "TIMA0";
 UART1.peripheral.$suggestSolution                = "UART0";
 UART2.peripheral.$suggestSolution                = "UART1";
 UART3.peripheral.$suggestSolution                = "UART2";
-UART3.DMA_CHANNEL_TX.peripheral.$suggestSolution = "DMA_CH0";
+UART3.DMA_CHANNEL_TX.peripheral.$suggestSolution = "DMA_CH1";
+UART4.peripheral.$suggestSolution                = "UART3";
+UART4.peripheral.rxPin.$suggestSolution          = "PA13";
+UART4.peripheral.txPin.$suggestSolution          = "PA26";
+UART4.DMA_CHANNEL_TX.peripheral.$suggestSolution = "DMA_CH0";

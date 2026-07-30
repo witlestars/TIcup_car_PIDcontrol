@@ -29,7 +29,7 @@ int main(void)
     OLED_Init();
 
     /* 4. 初始化任务 (内部会自动完成底层里程计和电机的初始化和使能) */
-    // Track_Init();
+    Track_Init();
     // Balance_Init();
 
     uint32_t last_10ms = 0;
@@ -44,10 +44,10 @@ int main(void)
         {
             last_10ms = g_sys_tick;
 
-            /* 执行循迹 PID 控制任务 */
-            // Chassis_Task(g_chassis_task,g_running);
+            /* 执行循迹控制任务 */
+            Chassis_Task();
 
-            /* 执行平衡 PID 控制任务 */
+            /* 执行平衡控制任务 */
             // Balance_Task(g_balance_task, g_running);
         }
 
@@ -135,6 +135,7 @@ void GROUP1_IRQHandler(void)
     static uint32_t last_time_start = 0;
     static uint32_t last_time_chassis = 0;
     static uint32_t last_time_balance = 0;
+    static uint32_t last_time_end = 0;
 
     // ====== 循环检查并清除 GPIOA 端口的所有按键标志位 ======
     uint32_t gpioA_status;
@@ -152,7 +153,11 @@ void GROUP1_IRQHandler(void)
         }
         else if (gpioA_status == GPIO_BUTTON_BTN_1_IIDX)
         {
-            //空
+            if ((g_sys_tick - last_time_end) > DEBOUNCE_TIME_MS)
+            {
+                g_running = false;
+                last_time_balance = g_sys_tick;
+            }
         }
     }
 

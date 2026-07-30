@@ -9,6 +9,7 @@
 #include "odometry.h"
 #include "motor.h"
 #include "oled.h"
+#include "imu.h"
 
 #define AB_DISTANCE_MM 1000   /* A→B 距离 (mm) */
 #define AB_TIME_LIMIT_MS 8000 /* A→B 超时限制 (ms) */
@@ -52,7 +53,6 @@ void Chassis_Task()
                 Motor_Stop();
                 g_chassis_task = Chassis_stop;
                 g_running = false;
-                first_time = true;
             }
             /* 超时强制停车 (8s) */
             else if ((uint32_t)(g_sys_tick - task_start_tick) >= AB_TIME_LIMIT_MS)
@@ -60,7 +60,6 @@ void Chassis_Task()
                 Motor_Stop();
                 g_chassis_task = Chassis_stop;
                 g_running = false;
-                first_time = true;
             }
             break;
         case One_Lap:
@@ -74,10 +73,13 @@ void Chassis_Task()
                 Motor_Stop();
                 g_chassis_task = Chassis_stop;
                 g_running = false;
-                first_time = true;
             }
             break;
         }
+    }
+    else {
+        Motor_Stop();
+        first_time = true;
     }
 }
 
@@ -103,5 +105,5 @@ void OLED_Task()
     OLED_PrintfAt(2, 0, "Bal : %-2d", g_balance_task);
 
     // 第四行：预留显示一些动态数据，比如速度或者陀螺仪角度
-    // OLED_PrintfAt(3, 0, "Yaw: %.1f", g_imu_data.yaw);
+    OLED_PrintfAt(3, 0, "Yaw: %.1f", g_imu_data.Yaw);
 }
