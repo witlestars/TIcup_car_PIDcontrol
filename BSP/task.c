@@ -22,7 +22,7 @@ volatile bool g_running = false;                      // 任务运行标志位
 // 用于统计任务运行时间
 static uint32_t task_start_tick = 0; // 任务开始时间戳
 extern uint32_t g_sys_tick;          // 全局系统时基 (ms)
-bool first_time = true;
+static bool first_time = true;
 
 void Chassis_Task()
 {

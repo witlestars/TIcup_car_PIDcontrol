@@ -48,6 +48,7 @@ int motor_i2cWrite(uint8_t addr, uint8_t reg, uint8_t len, uint8_t *data)
 
     // 6. 检查是否存在 NACK 或其他硬件错误
     if (DL_I2C_getControllerStatus(I2C_Motor_INST) & DL_I2C_CONTROLLER_STATUS_ERROR) {
+        DL_I2C_flushControllerTXFIFO(I2C_Motor_INST);  /* NACK 后清 FIFO 防锁死 */
         return 0xEE;
     }
 
@@ -80,8 +81,11 @@ int motor_i2cRead(uint8_t addr, uint8_t reg, uint8_t len, uint8_t *buf)
     while (!(DL_I2C_getControllerStatus(I2C_Motor_INST) & DL_I2C_CONTROLLER_STATUS_IDLE)) {
         if (--timeout == 0) return 3;
     }
-    
-    if (DL_I2C_getControllerStatus(I2C_Motor_INST) & DL_I2C_CONTROLLER_STATUS_ERROR) return 0xEE;
+
+    if (DL_I2C_getControllerStatus(I2C_Motor_INST) & DL_I2C_CONTROLLER_STATUS_ERROR) {
+        DL_I2C_flushControllerTXFIFO(I2C_Motor_INST);  /* NACK 后清 FIFO 防锁死 */
+        return 0xEE;
+    }
 
     // ========== 阶段二：转换方向，从从机读取数据 ==========
     DL_I2C_startControllerTransfer(I2C_Motor_INST, addr, DL_I2C_CONTROLLER_DIRECTION_RX, len);

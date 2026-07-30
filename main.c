@@ -113,7 +113,7 @@ void UART_K230_INST_IRQHandler(void)
              (pending_irq == DL_UART_IIDX_PARITY_ERROR))
     {
         // 发生错误时，必须清除标志位防止死锁！
-        DL_UART_Main_clearInterruptStatus(UART_IMU_INST,
+        DL_UART_Main_clearInterruptStatus(UART_K230_INST,
                                           (DL_UART_INTERRUPT_OVERRUN_ERROR |
                                            DL_UART_INTERRUPT_BREAK_ERROR |
                                            DL_UART_INTERRUPT_FRAMING_ERROR |
@@ -156,7 +156,7 @@ void GROUP1_IRQHandler(void)
             if ((g_sys_tick - last_time_end) > DEBOUNCE_TIME_MS)
             {
                 g_running = false;
-                last_time_balance = g_sys_tick;
+                last_time_end = g_sys_tick;
             }
         }
     }
