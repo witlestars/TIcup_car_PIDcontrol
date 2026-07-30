@@ -16,9 +16,6 @@
 #define __TRACK_H
 #include <stdint.h>
 
-#define TRACK_BASE_SPEED     200     /* 基础速度 (驱动板单位) */
-#define TRACK_TURN_GAIN_P    25.0f   /* 离心 P: 转向强度 */
-#define TRACK_TURN_GAIN_D    15.0f   /* 离心 D: 压低防反打 */
 #define TRACK_LOST_HOLD        25    /* 丢线保持周期 (25×10ms=250ms) */
 
 /* 运行时调参变量 (由 cmd.c 通过 UART 命令修改) */
@@ -26,8 +23,6 @@ typedef struct {
     float base_speed;    /* 基础速度 (驱动板单位) */
     float turn_p;        /* 离心 P */
     float turn_d;        /* 离心 D */
-    float pivot_speed;   /* 原地转弯速度 (驱动板单位, 默认200) */
-    float corner_fwd_ms; /* 直角弯前冲时间 (ms, 默认500, 命令f调节) */
 } track_cfg_t;
 extern track_cfg_t g_track_cfg;
 

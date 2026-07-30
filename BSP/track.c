@@ -26,10 +26,8 @@
 /* ─── 运行时调参变量 ─── */
 track_cfg_t g_track_cfg = {
     200,      /* base_speed 基础速度 (驱动板单位, 200≈慢速巡线) */
-    25.0f,    /* turn_p 离心 P: 转向强度 (加大压震荡) */
-    185.0f,     /* turn_d 离心 D: 压低防反打 (加大压震荡) */
-    120.0f,   /* pivot_speed (保留, 槽口型不停车不用) */
-    500.0f,   /* corner_fwd_ms (保留, 槽口型不停车不用) */
+    14.0f,    /* turn_p 离心 P: 转向强度 (加大压震荡) */
+    0.1f,     /* turn_d 离心 D: 压低防反打 (加大压震荡) */
 };
 
 /* ─── 超时锁定标志 (保留接口, 槽口型不触发) ─── */
@@ -131,13 +129,13 @@ void Track_Loop(void)
     } else {
         /* 丢线: 用最后有效方向, 给最大离心值激进转向找回线 */
         if (lost_cnt < TRACK_LOST_HOLD) {
-            if (last_valid > 0.01f)
-                centroid = 3.5f;
-            else if (last_valid < -0.01f)
-                centroid = -3.5f;
-            else
-                centroid = 0.0f;
-            lost_cnt++;
+            // if (last_valid > 0.01f)
+            //     centroid = 3.5f;
+            // else if (last_valid < -0.01f)
+            //     centroid = -3.5f;
+            // else
+            //     centroid = 0.0f;
+            // lost_cnt++;
         } else {
             centroid = 0.0f;
         }
