@@ -105,10 +105,10 @@ void OLED_Task()
         OLED_PrintfAt(0, 0, "=== WAITING ===");
     }
 
-    // 第二行：显示底盘 (Chassis) 任务
-    OLED_PrintfAt(1, 0, "Car : %-2d", g_chassis_task);
-    // 第三行：显示平衡 (Balance) 任务
-    OLED_PrintfAt(2, 0, "Bal : %-2d", g_balance_task);
+    // 第二行：显示底盘 (Chassis) 任务 + PD 预设组号
+    OLED_PrintfAt(1, 0, "Car:%d P%d", g_chassis_task, g_preset_idx);
+    // 第三行：显示当前 P/D 参数 (调参看这行)
+    OLED_PrintfAt(2, 0, "P%.0f D%.0f", g_track_cfg.turn_p, g_track_cfg.turn_d);
 
     // 第四行：预留显示一些动态数据，比如速度或者陀螺仪角度
     OLED_PrintfAt(3, 0, "Yaw: %.1f", g_imu_data.Yaw);

@@ -145,9 +145,9 @@ void GROUP1_IRQHandler(void)
         {
             if ((g_sys_tick - last_time_balance) > DEBOUNCE_TIME_MS)
             {
-                g_balance_task++;
-                if (g_balance_task >= 4)
-                    g_balance_task = 0;
+                /* BTN_3 复用: 切换 PD 预设组 (调参用, 平衡任务暂未实现) */
+                extern void Track_SwitchPreset(void);
+                Track_SwitchPreset();
                 last_time_balance = g_sys_tick;
             }
         }

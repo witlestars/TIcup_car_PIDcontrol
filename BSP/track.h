@@ -48,9 +48,11 @@ extern uint8_t g_corner_done_by;   /* 转弯退出原因: 0=未退出 1=灰度�
 
 /* ─── 圈数控制 (过2个半圆弯=1圈, 槽口型) ─── */
 extern uint8_t g_corner_count;     /* 当前圈已过半圆弯数 (0-2) */
+extern uint8_t g_preset_idx;       /* PD 预设组号 (BTN_3 切换, OLED 显示) */
 
 void Track_Init(void);
 void Track_Reset(void);              /* 复位巡线状态 + 圈数 */
 void Track_Loop(void);               /* TIMA0 ISR 每10ms调用 */
+void Track_SwitchPreset(void);       /* 切换 PD 预设 (BTN_3 调参) */
 
 #endif
