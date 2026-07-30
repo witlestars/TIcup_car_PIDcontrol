@@ -17,8 +17,8 @@
 #include <stdint.h>
 
 #define TRACK_BASE_SPEED     200     /* 基础速度 (驱动板单位) */
-#define TRACK_TURN_GAIN_P    18.0f   /* 离心 P: 转向强度 */
-#define TRACK_TURN_GAIN_D     1.5f   /* 离心 D: 压低防反打 */
+#define TRACK_TURN_GAIN_P    25.0f   /* 离心 P: 转向强度 */
+#define TRACK_TURN_GAIN_D    15.0f   /* 离心 D: 压低防反打 */
 #define TRACK_LOST_HOLD        25    /* 丢线保持周期 (25×10ms=250ms) */
 #define TRACK_PIVOT_TIMEOUT   0      /* 原地转弯超时 (0=不限时, 找到中间传感器才停) */
 
