@@ -11,7 +11,7 @@
 #include "oled.h"
 #include "imu.h"
 
-#define AB_DISTANCE_MM 1000   /* A→B 距离 (mm) */
+#define AB_DISTANCE_MM 1500   /* A→B 距离 (mm), 实测 1.5m */
 #define AB_TIME_LIMIT_MS 8000 /* A→B 超时限制 (ms) */
 
 // 在按钮中断中修改标志位
@@ -32,6 +32,7 @@ void Chassis_Task()
         {
             // 任务启动更新当前任务时间
             task_start_tick = g_sys_tick;
+            Odom_Init();  /* 清零里程计, 防止上次里程累加 */
             first_time = false;
         }
 
@@ -105,11 +106,11 @@ void OLED_Task()
         OLED_PrintfAt(0, 0, "=== WAITING ===");
     }
 
-    // 第二行：显示底盘 (Chassis) 任务 + PD 预设组号
-    OLED_PrintfAt(1, 0, "Car:%d P%d", g_chassis_task, g_preset_idx);
-    // 第三行：显示当前 P/D 参数 (调参看这行)
-    OLED_PrintfAt(2, 0, "P%.0f D%.0f", g_track_cfg.turn_p, g_track_cfg.turn_d);
+    // 第二行：显示底盘 (Chassis) 任务
+    OLED_PrintfAt(1, 0, "Car : %-2d", g_chassis_task);
+    // 第三行：显示平衡 (Balance) 任务
+    OLED_PrintfAt(2, 0, "Bal : %-2d", g_balance_task);
 
-    // 第四行：预留显示一些动态数据，比如速度或者陀螺仪角度
-    OLED_PrintfAt(3, 0, "Yaw: %.1f", g_imu_data.Yaw);
+    // 第四行：显示里程计总里程 (mm) + Yaw, 方便调试编码器方向
+    OLED_PrintfAt(3, 0, "D:%5.0f Y:%.0f", Odom_Get_Total_Dist(), g_imu_data.Yaw);
 }

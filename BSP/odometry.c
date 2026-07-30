@@ -6,6 +6,7 @@
 #include "odometry.h"
 #include "imu.h"
 #include "motor.h"
+#include "bsp_motor_iic.h"  /* Read_10_Enconder */
 #include <math.h>
 
 #ifndef M_PI
@@ -51,7 +52,10 @@ void Odom_Reset_Edge(void)
  */
 float Odom_Update(void)
 {
-    /* 1. 读编码器 (10ms内脉冲数) */
+    /* 1. 统一刷新编码器 (避免 L 读新 R 读旧) */
+    Read_10_Enconder();
+
+    /* 2. 读编码器 (10ms内脉冲数) */
     int16_t enc_l = Motor_Read_Encoder_L();
     int16_t enc_r = Motor_Read_Encoder_R();
 

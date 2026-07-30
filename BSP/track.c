@@ -26,22 +26,9 @@
 /* ─── 运行时调参变量 ─── */
 track_cfg_t g_track_cfg = {
     300,      /* base_speed 基础速度 (驱动板单位, 200≈慢速巡线) */      //  230         280
-    18.5f,    /* turn_p 离心 P: 转向强度 (加大压震荡) */                //  18.5        
-    50.0f,     /* turn_d 离心 D: 压低防反打 (加大压震荡) */              //  44.02      
+    18.5f,    /* turn_p 离心 P: 转向强度 (加大压震荡) */                //  18.5
+    50.0f,     /* turn_d 离心 D: 压低防反打 (加大压震荡) */              //  44.02
 };
-
-/* ─── PD 预设组 (BTN_3 切换, 调参用) ───
- * 5 组覆盖纯P→PD, 从保守到激进, OLED 显示组号和参数 */
-static const struct {
-    float base;  float p;  float d;
-} s_presets[5] = {
-    { 120, 10.0f,  0.0f },  /* 0: 纯P保守, 慢速 */
-    { 150, 15.0f,  0.0f },  /* 1: 纯P中等 */
-    { 150, 15.0f,  5.0f },  /* 2: PD入门 D/P=0.33 */
-    { 180, 20.0f,  8.0f },  /* 3: PD中速 D/P=0.4 */
-    { 200, 25.0f, 12.0f },  /* 4: PD激进 D/P=0.48 */
-};
-uint8_t g_preset_idx = 0;   /* 当前预设组号 (OLED 显示) */
 
 /* ─── 超时锁定标志 (保留接口, 槽口型不触发) ─── */
 uint8_t g_track_locked = 0;
@@ -108,18 +95,6 @@ void Track_Reset(void)
     curve_in_curve = 0;
     curve_hold_cnt = 0;
     curve_last_sign = 0;
-}
-
-/**
- * @brief 切换 PD 预设 (BTN_3 调用, 烧录一次测多组参数)
- */
-void Track_SwitchPreset(void)
-{
-    g_preset_idx++;
-    if (g_preset_idx >= 5) g_preset_idx = 0;
-    g_track_cfg.base_speed = s_presets[g_preset_idx].base;
-    g_track_cfg.turn_p     = s_presets[g_preset_idx].p;
-    g_track_cfg.turn_d     = s_presets[g_preset_idx].d;
 }
 
 /**

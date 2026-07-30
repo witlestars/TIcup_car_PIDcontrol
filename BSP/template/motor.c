@@ -82,10 +82,10 @@ void Motor_Init(void)
 
 /**
  * @brief 读取 M4 编码器 10ms 实时脉冲 (左轮)
+ * @note  Read_10_Enconder() 由调用方 (odometry.c) 统一调用, 此处直接读缓存
  */
 int16_t Motor_Read_Encoder_L(void)
 {
-    Read_10_Enconder();
     return (int16_t)Encoder_Offset[3];  /* M4 */
 }
 
