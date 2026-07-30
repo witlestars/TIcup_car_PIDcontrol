@@ -83,6 +83,12 @@ void Chassis_Task()
     }
 }
 
+// 平衡任务占位 (板球系统 PID + 陀螺仪前馈, 待实现)
+void Balance_Task(void)
+{
+    /* TODO: 按 g_balance_task 分支实现 Balance_0/1/2 */
+}
+
 // 在主循环中以100ms为周期调度
 void OLED_Task()
 {

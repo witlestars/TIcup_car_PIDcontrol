@@ -20,7 +20,6 @@
 #define TRACK_TURN_GAIN_P    25.0f   /* 离心 P: 转向强度 */
 #define TRACK_TURN_GAIN_D    15.0f   /* 离心 D: 压低防反打 */
 #define TRACK_LOST_HOLD        25    /* 丢线保持周期 (25×10ms=250ms) */
-#define TRACK_PIVOT_TIMEOUT   0      /* 原地转弯超时 (0=不限时, 找到中间传感器才停) */
 
 /* 运行时调参变量 (由 cmd.c 通过 UART 命令修改) */
 typedef struct {
@@ -32,11 +31,7 @@ typedef struct {
 } track_cfg_t;
 extern track_cfg_t g_track_cfg;
 
-extern float g_base_rpm;      /* 兼容旧命令, 实际映射到 g_track_cfg.base_speed */
 extern uint8_t g_track_locked; /* 1=超时锁定停车, 需 'g' 命令复位 */
-extern float g_speed_kp;       /* 不再使用, 保留兼容 */
-extern float g_speed_ki;
-extern float g_speed_kd;
 
 /* 调试变量 (每帧更新, 供 cmd.c 发送) */
 typedef struct {
@@ -50,17 +45,14 @@ typedef struct {
 extern track_dbg_t g_dbg;
 
 /* ─── IMU 辅助转弯 (避免转过头) ─── */
-extern uint8_t g_imu_assist;       /* 1=启用IMU闭环转弯, 0=纯灰度 (默认1) */
+extern uint8_t g_imu_assist;       /* 1=启用IMU闭环转弯, 0=纯灰度 (默认0, 槽口型不用) */
 extern float   g_yaw_target;       /* 当前转弯目标yaw (度) */
 extern float   g_yaw_err;          /* 当前yaw误差 (度, 带符号) */
 extern float   g_yaw_now;          /* 当前yaw (度, 缓存) */
 extern uint8_t g_corner_done_by;   /* 转弯退出原因: 0=未退出 1=灰度找到线 2=yaw到位 3=超时 */
 
-/* ─── 圈数控制 (过4个直角弯=1圈) ─── */
-extern uint8_t g_target_laps;      /* 目标圈数 (按钮调, 默认1) */
-extern uint8_t g_current_lap;      /* 当前已完成圈数 */
-extern uint8_t g_corner_count;     /* 当前圈已过直角弯数 (0-4) */
-extern uint8_t g_laps_done;        /* 1=跑完目标圈数, 自动停车 (需按START复位) */
+/* ─── 圈数控制 (过2个半圆弯=1圈, 槽口型) ─── */
+extern uint8_t g_corner_count;     /* 当前圈已过半圆弯数 (0-2) */
 
 void Track_Init(void);
 void Track_Reset(void);              /* 复位巡线状态 + 圈数 */
