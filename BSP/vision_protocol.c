@@ -16,6 +16,12 @@
 
 volatile Vision_ProtocolTypeDef g_vision_data;
 
+#define VISION_RX_QUEUE_SIZE 128U
+
+static uint8_t s_vision_rx_queue[VISION_RX_QUEUE_SIZE];
+static volatile uint16_t s_vision_rx_head = 0;
+static volatile uint16_t s_vision_rx_tail = 0;
+
 // 计算字节数组的 XOR 校验和[cite: 4, 6]
 static uint8_t Vision_CalcXor(const uint8_t *data, uint16_t len) {
     uint8_t checksum = 0;
@@ -100,6 +106,8 @@ static void Vision_ProcessPayload( const uint8_t *payload,uint16_t len)
 
 void Vision_Init()
 {
+    s_vision_rx_head = 0;
+    s_vision_rx_tail = 0;
     g_vision_data.rx_index = 0;
     g_vision_data.position_01mm = 0;
     g_vision_data.velocity_mm_s = 0;
@@ -116,6 +124,29 @@ void Vision_Init()
     memset(g_vision_data.rx_checksum_buf, 0, sizeof(g_vision_data.rx_checksum_buf));
     
     NVIC_EnableIRQ(UART_K230_INST_INT_IRQN);
+}
+
+void Vision_RX_ByteCallback(uint8_t data)
+{
+    uint16_t next_head =
+        (uint16_t)((s_vision_rx_head + 1U) % VISION_RX_QUEUE_SIZE);
+
+    if (next_head != s_vision_rx_tail)
+    {
+        s_vision_rx_queue[s_vision_rx_head] = data;
+        s_vision_rx_head = next_head;
+    }
+}
+
+void Vision_ParseTask(void)
+{
+    while (s_vision_rx_tail != s_vision_rx_head)
+    {
+        uint8_t data = s_vision_rx_queue[s_vision_rx_tail];
+        s_vision_rx_tail =
+            (uint16_t)((s_vision_rx_tail + 1U) % VISION_RX_QUEUE_SIZE);
+        Vision_ParseByte(data);
+    }
 }
 
 uint8_t Vision_ParseByte(uint8_t data)

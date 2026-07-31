@@ -1,10 +1,11 @@
 #include "balance.h"
-#include "ti_msp_dl_config.h" 
-#include "ZDT_X42S_Driver.h"  
-#include "delay.h"        
-#include "vision_protocol.h"     
+
+#include "ZDT_X42S_Driver.h"
+#include "delay.h"
+#include "ti_msp_dl_config.h"
 
 static ZDT_MotorTypeDef balance_motor;
+
 volatile Balance_PID_t g_balance_pid;
 volatile float g_balance_motor_angle_deg = 0.0f;
 volatile bool g_balance_angle_limit_active = false;
@@ -20,19 +21,17 @@ static uint32_t s_angle_update_tick = 0;
 
 static void Balance_UpdateEstimatedAngle(void)
 {
-    uint32_t now_tick;
-    uint32_t elapsed_ms;
+    uint32_t now_tick = g_sys_tick;
+    uint32_t elapsed_ms = (uint32_t)(now_tick - s_angle_update_tick);
 
-    now_tick = g_sys_tick;
-    elapsed_ms = (uint32_t)(now_tick - s_angle_update_tick);
-    if (elapsed_ms == 0)
+    if (elapsed_ms == 0U)
     {
         return;
     }
 
     s_angle_update_tick = now_tick;
-    g_balance_motor_angle_deg += (float)s_commanded_speed_rpm * 0.006f *
-                                 (float)elapsed_ms;
+    g_balance_motor_angle_deg +=
+        (float)s_commanded_speed_rpm * 0.006f * (float)elapsed_ms;
 }
 
 void Balance_Init(void)
@@ -42,7 +41,6 @@ void Balance_Init(void)
     ZDT_Motor_Enable(&balance_motor, true);
     delay_ms(500);
 
-    /* 主控上电时以电机上位机中已经设置好的零点作为 0 度。 */
     g_balance_motor_angle_deg = 0.0f;
     g_balance_angle_limit_active = false;
     s_commanded_speed_rpm = 0;
@@ -50,15 +48,12 @@ void Balance_Init(void)
 
     g_balance_pid.Kp = 0.0f;
     g_balance_pid.Ki = 0.0f;
-    g_balance_pid.Kd = 0.0f;  // 注意：引入真实速度后，Kd的量级可能需要重新调整
-    g_balance_pid.Kff = 0.0f; 
-    
+    g_balance_pid.Kd = 0.0f;
+    g_balance_pid.Kff = 0.0f;
     g_balance_pid.error_sum = 0.0f;
-    g_balance_pid.last_error = 0.0f; // 在新算法中不再作为核心微分依据
-    
+    g_balance_pid.last_error = 0.0f;
     g_balance_pid.out_max = 200.0f;
-    g_balance_pid.integral_max = 50.0f;  
-
+    g_balance_pid.integral_max = 50.0f;
 }
 
 int Balance_MotorSetSpeed(int16_t speed)
@@ -108,10 +103,12 @@ void Balance_AngleEstimateTask(void)
 
 void Balance_StartReturnToZero(int16_t speed)
 {
-    if (speed < 0) {
+    if (speed < 0)
+    {
         speed = -speed;
     }
-    if (speed == 0) {
+    if (speed == 0)
+    {
         speed = BALANCE_RETURN_SPEED_DEFAULT;
     }
 
@@ -155,74 +152,44 @@ bool Balance_ReturnToZeroTask(void)
     return true;
 }
 
-void Balance_PID(float target_pos, float vision_pos, float vision_vel, uint16_t age_ms, float gyro_rate)
+float Balance_PID(volatile Balance_PID_t *pid, float target,
+                  float feedback, float feedback_rate,
+                  float feedforward, float dt_s)
 {
-    float current_pos_predicted;
-    float error, p_term, i_term, d_term, feedforward, output;
-    int16_t motor_speed;
+    float error;
+    float output;
 
-    /* 1. 航位推算与通信超时保护  */
-    // 计算从收到这帧数据到现在，经过了多少毫秒
-    uint32_t local_delay_ms = g_sys_tick - g_vision_data.last_update_tick;
-
-    // 视觉协议建议：连续 250ms 未收到有效帧，视为失锁安全状态
-    if (local_delay_ms > 250 || g_vision_data.target_found == 0) 
+    if (pid == NULL || dt_s <= 0.0f)
     {
-        // 视觉丢失或超时，电机停转
-        Balance_MotorSetSpeed(0);
-        return; 
+        return 0.0f;
     }
 
-    // 真正的总延时 = K230内部延时 + 单片机本地等待延时
-    float total_delay_s = (age_ms + local_delay_ms) / 1000.0f;
+    error = target - feedback;
+    pid->error_sum += error * dt_s;
 
-    // 动态推算当前时刻小球的真实位置！
-    current_pos_predicted = vision_pos + vision_vel * total_delay_s;
-
-    /* 2. 计算预测偏差 */
-    error = target_pos - current_pos_predicted;
-    
-    // 静止死区判断
-    // 如果位置误差小于 1.0mm 且 速度小于 8.0mm/s (阈值根据你 VOFA+ 观察到的噪声峰值来定)
-    if (error > -3.0f && error < 3.0f && vision_vel > -10.0f && vision_vel < 10.0f) 
+    if (pid->error_sum > pid->integral_max)
     {
-        error = 0.0f;
-        vision_vel = 0.0f;
-        // 这会让计算出的 p_term 和 d_term 直接归零，系统进入绝对安静状态
+        pid->error_sum = pid->integral_max;
+    }
+    else if (pid->error_sum < -pid->integral_max)
+    {
+        pid->error_sum = -pid->integral_max;
     }
 
+    output = pid->Kp * error +
+             pid->Ki * pid->error_sum -
+             pid->Kd * feedback_rate +
+             pid->Kff * feedforward;
 
-    /* 3. 积分计算 (抗积分饱和) */
-    g_balance_pid.error_sum += error;
-    if (g_balance_pid.error_sum > g_balance_pid.integral_max) {
-        g_balance_pid.error_sum = g_balance_pid.integral_max;
-    } else if (g_balance_pid.error_sum < -g_balance_pid.integral_max) {
-        g_balance_pid.error_sum = -g_balance_pid.integral_max;
+    if (output > pid->out_max)
+    {
+        output = pid->out_max;
+    }
+    else if (output < -pid->out_max)
+    {
+        output = -pid->out_max;
     }
 
-    /* 4. 比例与积分项 */
-    p_term = g_balance_pid.Kp * error;
-    i_term = g_balance_pid.Ki * g_balance_pid.error_sum;
-
-    /* 5. 微分计算 (直接使用视觉真实速度) 
-     * 目标速度为 0，所以误差变化率就是 -vision_vel 
-     */
-    d_term = g_balance_pid.Kd * (-vision_vel);
-
-    /* 6. 前馈计算 (基于陀螺仪角速度) */
-    feedforward = g_balance_pid.Kff * gyro_rate;
-
-    /* 7. 复合输出 */
-    output = p_term + i_term + d_term + feedforward;
-
-    /* 8. 输出量限幅 */
-    if (output > g_balance_pid.out_max) {
-        output = g_balance_pid.out_max;
-    } else if (output < -g_balance_pid.out_max) {
-        output = -g_balance_pid.out_max;
-    }
-
-    /* 9. 转换类型并下发指令给电机 */
-    motor_speed = (int16_t)output;
-    Balance_MotorSetSpeed(motor_speed);
+    pid->last_error = error;
+    return output;
 }

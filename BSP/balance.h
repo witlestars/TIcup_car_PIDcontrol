@@ -48,7 +48,10 @@ bool Balance_ReturnToZeroTask(void);
  * @param  age_ms      该帧视觉数据的年龄/延时 (ms)
  * @param  gyro_rate   陀螺仪当前输出的角速度
  */
-void Balance_PID(float target_pos, float vision_pos, float vision_vel, uint16_t age_ms, float gyro_rate);
+/* Generic PID; all gains and runtime state come from the passed object. */
+float Balance_PID(volatile Balance_PID_t *pid, float target,
+                  float feedback, float feedback_rate,
+                  float feedforward, float dt_s);
 
 #ifdef __cplusplus
 }

@@ -18,6 +18,7 @@ typedef enum{
     Balance_0,      // 中心到+5，+5到-5，停在-5
     Balance_1,      // 锁定中心
     Balance_2,      // 锁定任意位置
+    BalanceTaskNum,
 } BalanceTask_e;
 
 extern volatile bool g_running;          // 小车运行标志位

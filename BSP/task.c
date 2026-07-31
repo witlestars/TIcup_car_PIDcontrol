@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "task.h"
 #include "balance.h"
+#include "balance_segmented.h"
 #include "track.h"
 #include "odometry.h"
 #include "motor.h"
@@ -197,42 +198,101 @@ void Chassis_Task()
 // 平衡任务
 void Balance_Task(void)
 {
-    // 只有在全局运行标志为 true 时才执行控制
-    if (g_running == true) 
+    static BalanceTask_e last_task = BalanceTaskNum;
+    static bool segmented_initialized = false;
+    float target_pos;
+    float vision_pos;
+    float vision_vel;
+    float gyro_rate;
+    float predicted_pos;
+    float pid_output;
+    uint16_t age_ms;
+    uint32_t local_delay_ms;
+
+    if (!segmented_initialized)
     {
-            /* --- 1. 目标设定 --- */
-            float target_pos = 0.0f; // 调参时，目标位置固定在物理中心 (0 mm)
-
-            /* --- 2. 传感器数据预处理 --- */
-            // 将视觉回传的 0.1mm 单位转换为 mm
-            float vision_pos = g_vision_data.position_01mm / 10.0f; 
-            // 直接读取 K230 传回的真实速度 (mm/s)
-            float vision_vel = g_vision_data.velocity_mm_s;
-            // 读取 K230 数据包中的延时标签 (ms)
-            uint16_t age_ms  = g_vision_data.age_ms;
-            
-            // 读取陀螺仪角速度 (请根据你实际安装的方向选择 Gyro_X 或 Gyro_Y)
-            float gyro_rate  = g_imu_data.GyroY; 
-
-            /* --- 3. 调用核心控制算法 --- */
-            // 该函数内部已包含 "延时推算补偿" 和 "视觉真实速度替换微分" 逻辑
-            Balance_PID(target_pos, vision_pos, vision_vel, age_ms, gyro_rate);
-
-            /* --- 4. VOFA+ 实时波形反馈 (DMA 触发) --- */
-            // 计算用于可视化的预测位置
-            float predicted_pos = vision_pos + (vision_vel * (age_ms / 1000.0f));
-            
-            // 根据 vofa.c 中定义的接口，发送 3 个关键浮点数据[cite: 6, 7]
-            // CH0(target):  目标位置
-            // CH1(current): 补偿后的预测位置 (观察回中平滑度)
-            // CH2(output):  真实视觉速度 (观察阻尼效果与抖动)
-            VOFA_SendWaveData(target_pos, predicted_pos, vision_vel); 
+        SegmentedBalance_Init();
+        segmented_initialized = true;
     }
-    else 
+
+    Balance_AngleEstimateTask();
+
+    if (!g_running || g_balance_task == Balance_stop)
     {
-        // 如果 g_running 为 false，作为安全兜底，强制停机[cite: 8]
-        Balance_MotorSetSpeed(0); 
+        if (SegmentedBalance_IsActive())
+        {
+            SegmentedBalance_Stop();
+        }
+        g_balance_pid.error_sum = 0.0f;
+        Balance_MotorSetSpeed(0);
+        last_task = BalanceTaskNum;
+        return;
     }
+
+    if (g_balance_task != last_task)
+    {
+        SegmentedBalance_Stop();
+        g_balance_pid.error_sum = 0.0f;
+        g_balance_pid.last_error = 0.0f;
+
+        switch (g_balance_task)
+        {
+        case Balance_0:
+            SegmentedBalance_StartChallenge3();
+            break;
+
+        case Balance_2:
+            if (g_vision_data.target_found != 0U)
+            {
+                target_pos = (float)g_vision_data.position_01mm / 10.0f;
+            }
+            else
+            {
+                target_pos = 0.0f;
+            }
+            SegmentedBalance_StartHold(target_pos);
+            break;
+
+        case Balance_1:
+        default:
+            break;
+        }
+
+        last_task = g_balance_task;
+    }
+
+    if (g_balance_task == Balance_0 || g_balance_task == Balance_2)
+    {
+        SegmentedBalance_Task();
+        return;
+    }
+
+    target_pos = 0.0f;
+    vision_pos = (float)g_vision_data.position_01mm / 10.0f;
+    vision_vel = (float)g_vision_data.velocity_mm_s;
+    age_ms = g_vision_data.age_ms;
+    gyro_rate = g_imu_data.GyroY;
+    local_delay_ms =
+        (uint32_t)(g_sys_tick - g_vision_data.last_update_tick);
+
+    if (local_delay_ms > 250U || g_vision_data.target_found == 0U)
+    {
+        g_balance_pid.error_sum = 0.0f;
+        Balance_MotorSetSpeed(0);
+        return;
+    }
+
+    predicted_pos = vision_pos +
+        vision_vel * ((float)(age_ms + local_delay_ms) / 1000.0f);
+    pid_output = Balance_PID(&g_balance_pid,
+                             target_pos,
+                             predicted_pos,
+                             vision_vel,
+                             gyro_rate,
+                             0.01f);
+    Balance_MotorSetSpeed((int16_t)pid_output);
+
+    VOFA_SendWaveData(target_pos, predicted_pos, vision_vel);
 }
 
 // 在主循环中以100ms为周期调度

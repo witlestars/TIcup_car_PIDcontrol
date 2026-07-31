@@ -32,6 +32,8 @@ extern volatile IMU_Data_t g_imu_data;
 
 /* 函数声明 */
 void IMU_Init(void);
+void IMU_RX_ByteCallback(uint8_t rx_byte);
+void IMU_ParseTask(void);
 void IMU_UART_ParseByte(uint8_t rx_byte);
 
 #endif /* __IMU_H__ */

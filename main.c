@@ -35,8 +35,8 @@ int main(void)
     NVIC_EnableIRQ(UART_Motor_INST_INT_IRQN);
 
     /* 3. 模块初始化 (测试 VOFA，暂时屏蔽其余外设)[cite: 9] */
-    // IMU_Init();
-    // OLED_Init();
+    IMU_Init();
+    OLED_Init();
 
     /* 4. 初始化任务 (测试 VOFA，暂时屏蔽底层控制)[cite: 9] */
     // Track_Init();
@@ -51,6 +51,8 @@ int main(void)
     {
         // UART 中断只负责收包，命令解析放在主循环避免中断内阻塞。
         VOFA_CommandTask();
+        IMU_ParseTask();
+        Vision_ParseTask();
         Balance_MotorFeedbackTask();
         /* 10ms 控制节拍[cite: 9] */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10)
@@ -79,8 +81,7 @@ void UART_IMU_INST_IRQHandler(void)
     {
         while (DL_UART_Main_isRXFIFOEmpty(UART_IMU_INST) == false)
         {
-            // uint8_t rx_data = DL_UART_Main_receiveData(UART_IMU_INST);
-            // IMU_UART_ParseByte(rx_data); // 暂时屏蔽
+            IMU_RX_ByteCallback(DL_UART_Main_receiveData(UART_IMU_INST));
         }
     }
     else if ((pending_irq == DL_UART_IIDX_OVERRUN_ERROR) ||
@@ -104,8 +105,7 @@ void UART_K230_INST_IRQHandler(void)
     {
         while (DL_UART_Main_isRXFIFOEmpty(UART_K230_INST) == false)
         {
-            uint8_t rx_data = DL_UART_Main_receiveData(UART_K230_INST);
-            Vision_ParseByte(rx_data); 
+            Vision_RX_ByteCallback(DL_UART_Main_receiveData(UART_K230_INST));
         }
     }
     else if ((pending_irq == DL_UART_IIDX_OVERRUN_ERROR) ||
@@ -113,7 +113,7 @@ void UART_K230_INST_IRQHandler(void)
              (pending_irq == DL_UART_IIDX_FRAMING_ERROR) ||
              (pending_irq == DL_UART_IIDX_PARITY_ERROR))
     {
-        DL_UART_Main_clearInterruptStatus(UART_IMU_INST,
+        DL_UART_Main_clearInterruptStatus(UART_K230_INST,
                                           (DL_UART_INTERRUPT_OVERRUN_ERROR |
                                            DL_UART_INTERRUPT_BREAK_ERROR |
                                            DL_UART_INTERRUPT_FRAMING_ERROR |

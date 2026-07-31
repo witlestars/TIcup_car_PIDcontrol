@@ -72,7 +72,17 @@ extern volatile uint32_t g_sys_tick;
 void Vision_Init();
 
 /**
- * @brief  视觉数据解析 (在串口接收中断中逐字节调用)
+ * @brief  UART 中断接收回调，仅缓存字节
+ */
+void Vision_RX_ByteCallback(uint8_t data);
+
+/**
+ * @brief  在主循环中完成视觉帧校验和完整解析
+ */
+void Vision_ParseTask(void);
+
+/**
+ * @brief  视觉数据逐字节解析，由 Vision_ParseTask 调用
  */
 uint8_t Vision_ParseByte(uint8_t data);
 
