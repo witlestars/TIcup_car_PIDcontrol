@@ -12,6 +12,12 @@ volatile bool g_motor_tx_busy = false;
  */
 static int ZDT_Motor_SendCommand(ZDT_MotorTypeDef *motor, uint8_t *tx_data, uint16_t tx_len)
 {
+    if (motor == NULL || tx_data == NULL || tx_len == 0 || g_motor_tx_busy) {
+        return -1;
+    }
+
+    DL_DMA_disableChannel(DMA, motor->dma_tx_ch);
+
     /* 1. 设置源地址 (你的指令数组 tx_data) */
     DL_DMA_setSrcAddr(DMA, motor->dma_tx_ch, (uint32_t)tx_data);
     /* 2. 设置目的地址 (刚刚修改的 TXDATA 寄存器) */
@@ -58,9 +64,11 @@ int ZDT_Motor_Enable(ZDT_MotorTypeDef *motor, bool enable)
     cmd[4] = SYNC_FLAG;            
     cmd[5] = 0x6B;                 
 
-    ZDT_Motor_SendCommand(motor, cmd, 6);
-    motor->status.enabled = enable;
-    return 0;
+    int result = ZDT_Motor_SendCommand(motor, cmd, 6);
+    if (result == 0) {
+        motor->status.enabled = enable;
+    }
+    return result;
 }
 
 int ZDT_Motor_SetPosition(ZDT_MotorTypeDef *motor, float angle, uint16_t speed)
@@ -94,8 +102,7 @@ int ZDT_Motor_SetPosition_Pulse(ZDT_MotorTypeDef *motor, int32_t pulse, uint16_t
     cmd[11] = SYNC_FLAG;           
     cmd[12] = 0x6B;                
 
-    ZDT_Motor_SendCommand(motor, cmd, 13);
-    return 0;
+    return ZDT_Motor_SendCommand(motor, cmd, 13);
 }
 
 int ZDT_Motor_SetSpeed(ZDT_MotorTypeDef *motor, int16_t speed)
@@ -124,9 +131,7 @@ int ZDT_Motor_SetSpeed(ZDT_MotorTypeDef *motor, int16_t speed)
     cmd[6] = SYNC_FLAG;            
     cmd[7] = 0x6B;                 
 
-    ZDT_Motor_SendCommand(motor, cmd, 8);
-
-    return 0;
+    return ZDT_Motor_SendCommand(motor, cmd, 8);
 }
 
 int ZDT_Motor_Stop(ZDT_MotorTypeDef *motor)
@@ -138,8 +143,7 @@ int ZDT_Motor_Stop(ZDT_MotorTypeDef *motor)
     cmd[3] = SYNC_FLAG;            
     cmd[4] = 0x6B;                 
 
-    ZDT_Motor_SendCommand(motor, cmd, 5);
-    return 0;
+    return ZDT_Motor_SendCommand(motor, cmd, 5);
 }
 
 int ZDT_Motor_ReturnZero(ZDT_MotorTypeDef *motor, uint16_t speed)
@@ -167,8 +171,7 @@ int ZDT_Motor_ReturnZeroEx(ZDT_MotorTypeDef *motor, uint16_t speed, ZDT_HomingDi
     cmd[3] = SYNC_FLAG;            
     cmd[4] = 0x6B;                 
 
-    ZDT_Motor_SendCommand(motor, cmd, 5);
-    return 0;
+    return ZDT_Motor_SendCommand(motor, cmd, 5);
 }
 
 int ZDT_Motor_ZeroPosition(ZDT_MotorTypeDef *motor)
@@ -179,8 +182,7 @@ int ZDT_Motor_ZeroPosition(ZDT_MotorTypeDef *motor)
     cmd[2] = 0x6D;                 
     cmd[3] = 0x6B;                 
 
-    ZDT_Motor_SendCommand(motor, cmd, 4);
-    return 0;
+    return ZDT_Motor_SendCommand(motor, cmd, 4);
 }
 
 int ZDT_Motor_ClearStall(ZDT_MotorTypeDef *motor)
@@ -190,8 +192,7 @@ int ZDT_Motor_ClearStall(ZDT_MotorTypeDef *motor)
     cmd[1] = 0x0E;
     cmd[2] = 0x52;
     cmd[3] = 0x6B;
-    ZDT_Motor_SendCommand(motor, cmd, 4);
-    return 0;
+    return ZDT_Motor_SendCommand(motor, cmd, 4);
 }
 
 int ZDT_Motor_ChangeID(ZDT_MotorTypeDef *motor, uint8_t new_id)
@@ -201,9 +202,12 @@ int ZDT_Motor_ChangeID(ZDT_MotorTypeDef *motor, uint8_t new_id)
     cmd[1] = 0xAE;
     cmd[2] = new_id;
     cmd[3] = 0x6B;
-    ZDT_Motor_SendCommand(motor, cmd, 4);
-    motor->motor_id = new_id;
-    return 0;
+    int result = ZDT_Motor_SendCommand(motor, cmd, 4);
+    if (result == 0) {
+        motor->motor_id = new_id;
+        motor->status.motor_id = new_id;
+    }
+    return result;
 }
 
 int ZDT_Motor_SetMode(ZDT_MotorTypeDef *motor, bool closed_loop)
@@ -215,8 +219,7 @@ int ZDT_Motor_SetMode(ZDT_MotorTypeDef *motor, bool closed_loop)
     cmd[3] = 0;                    
     cmd[4] = closed_loop ? 0x02 : 0x01;  
     cmd[5] = 0x6B;
-    ZDT_Motor_SendCommand(motor, cmd, 6);
-    return 0;
+    return ZDT_Motor_SendCommand(motor, cmd, 6);
 }
 
 int ZDT_Motor_SetControlMode(ZDT_MotorTypeDef *motor, ZDT_ControlMode_e mode)
@@ -231,27 +234,4 @@ void ZDT_Motor_SetTargetPosition(ZDT_MotorTypeDef *motor, float angle, uint16_t 
     if (motor == NULL) return;
     motor->target_position = angle;
     motor->position_speed = speed;
-}
-
-// 电机发送DMA中断函数
-void DMA_IRQHandler(void)
-{
-    /* 检查是否是你配置给串口 TX 的 DMA 通道（例如 Channel 0）产生的中断 */
-    switch (DL_DMA_getPendingInterrupt(DMA)) {
-        case DL_DMA_EVENT_IIDX_DMACH0:  // 假设 DMA CH0 是给电机串口用的
-            
-            /* 清除中断标志 */
-            DL_DMA_clearInterruptStatus(DMA, DL_DMA_INTERRUPT_CHANNEL0);
-            
-            /* 解除忙碌状态，允许下一次 Balance_Task 下发指令 */
-            g_motor_tx_busy = false; 
-            
-            break;
-            
-        // 如果有 K230 或陀螺仪的 DMA 接收通道，在此处继续添加 case
-        // case DL_DMA_EVENT_IIDX_DMACH1: ...
-        
-        default:
-            break;
-    }
 }

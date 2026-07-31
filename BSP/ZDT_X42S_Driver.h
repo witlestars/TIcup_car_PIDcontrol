@@ -27,6 +27,8 @@ extern "C" {
 
 extern volatile bool g_motor_tx_busy;
 
+
+
 /* 电机控制模式 */
 typedef enum {
     ZDT_MODE_SPEED = 0,    
@@ -41,7 +43,8 @@ typedef enum {
     ZDT_HOMING_DIR_LIMIT = 3     
 } ZDT_HomingDir_e;
 
-#define RPM_TO_INTERNAL(rpm)  ((int16_t)((rpm) * 10))
+/* 当前驱动命令采用 Emm 固件格式，速度字段单位为 RPM。 */
+#define RPM_TO_INTERNAL(rpm)  ((int16_t)(rpm))
 
 /* 电机状态结构体 (精简版) */
 typedef struct {
@@ -60,7 +63,7 @@ typedef struct {
     /* 控制模式 */
     ZDT_ControlMode_e control_mode;     
     float target_position;              
-    uint16_t position_speed;            
+    uint16_t position_speed;
 } ZDT_MotorTypeDef;
 
 
