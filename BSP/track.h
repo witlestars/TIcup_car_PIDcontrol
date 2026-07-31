@@ -21,12 +21,17 @@
 /* 运行时调参变量 (由 cmd.c 通过 UART 命令修改) */
 typedef struct {
     float base_speed;    /* 基础速度 (驱动板单位) */
-    float turn_p;        /* 离心 P */
-    float turn_d;        /* 离心 D */
+    float turn_p;        /* 离心 P (直道) */
+    float turn_d;        /* 离心 D (直道, 低D压抖) */
+    float curve_p;       /* 弯道 P (高P补转向力) */
+    float curve_d;       /* 弯道 D (高D助进弯冲击) */
 } track_cfg_t;
 extern track_cfg_t g_track_cfg;
 
 extern uint8_t g_track_locked; /* 1=超时锁定停车, 需 'g' 命令复位 */
+
+/* ─── 巡线模式 (task.c 根据CAR模式设置) ─── */
+extern uint8_t g_track_mode;  /* 0=单PD(全程统一参数), 1=分段PD(直道/弯道切换) */
 
 /* 调试变量 (每帧更新, 供 cmd.c 发送) */
 typedef struct {

@@ -55,15 +55,12 @@ float Odom_Update(void)
     /* 1. 统一刷新编码器 (避免 L 读新 R 读旧) */
     Read_10_Enconder();
 
-    /* 2. 读编码器 (10ms内脉冲数) */
-    int16_t enc_l = Motor_Read_Encoder_L();
-    int16_t enc_r = Motor_Read_Encoder_R();
+    /* 2. 读编码器 (10ms内脉冲数)
+     * 编码器读数为负 (驱动板方向与车前进方向相反), 加负号修正 */
+    int16_t enc_l = -Motor_Read_Encoder_L();
+    int16_t enc_r = -Motor_Read_Encoder_R();
 
-    /* 2. 转换为位移 (mm)
-     * 注意: 编码器读数有正负, 正向前进为正
-     *       电机线序: M4=左轮, M2=右轮, 用负号修正转向 (见main.c)
-     *       所以编码器返回值的符号需要根据实际情况判断
-     *       这里假设前进时 enc_l > 0, enc_r > 0 (如不对, 加负号) */
+    /* 3. 转换为位移 (mm) */
     float d_l = (float)enc_l * MM_PER_PULSE;
     float d_r = (float)enc_r * MM_PER_PULSE;
 

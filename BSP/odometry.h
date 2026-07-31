@@ -32,8 +32,11 @@
 #define WHEEL_DIAMETER_MM   65.0f
 #define GEAR_RATIO          40
 #define PULSE_PER_ROUND     11
-/* 1脉冲位移 = π × 直径 / (减速比 × 线数) */
-#define MM_PER_PULSE        (3.14159f * WHEEL_DIAMETER_MM / (GEAR_RATIO * PULSE_PER_ROUND))
+/* 1脉冲位移 = π × 直径 / (减速比 × 线数)
+ * 注: 实测标定发现驱动板返回值已做部分减速, 原始公式 (0.464) 小了10倍
+ *     实测 1.5m 对应 D≈150, 故系数需 ×10 修正为 4.64 mm/脉冲
+ *     后续如换电机/驱动板需重新标定 */
+#define MM_PER_PULSE        (3.14159f * WHEEL_DIAMETER_MM / (GEAR_RATIO * PULSE_PER_ROUND) * 10.0f)
 
 /* ────────────── API ────────────── */
 

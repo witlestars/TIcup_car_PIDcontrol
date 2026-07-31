@@ -5,8 +5,12 @@
 
 typedef enum{
     Chassis_stop = 0,   // 停止
-    A_to_B,             // A点到B点
-    One_Lap,            // 一圈
+    CAR1,               // 分段PD跑一圈, 识别终止线停
+    CAR2,               // 占位 (等数据)
+    CAR3,               // A_to_B: B200参数跑1500mm停
+    CAR4,               // 单PD跑一圈, 识别终止线停
+    CAR5,               // 单PD跑一圈, 识别终止线停 (同CAR4)
+    ChassisTaskNum,     // 任务总数 (用于循环边界)
 } ChassisTask_e;
 
 typedef enum{
