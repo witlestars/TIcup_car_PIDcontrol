@@ -3,6 +3,10 @@
 int Encoder_Offset[4];   /* 10ms 实时脉冲差值 */
 int Encoder_Now[4];      /* 累计脉冲总数 */
 
+/* I2C 调试: 记录最后一次读 M2/M4 的返回值 (0=成功, 非0=失败码) */
+volatile int g_i2c_err_m2 = -1;   /* -1=从未读取过 */
+volatile int g_i2c_err_m4 = -1;
+
 /**
  * float 转 bytes（小端）
  */
@@ -90,24 +94,30 @@ void control_pwm(int16_t m1, int16_t m2, int16_t m3, int16_t m4)
 }
 
 /**
- * 读取 10ms 周期内的编码器脉冲差值（4 个电机）
- * 结果存入 Encoder_Offset[0~3]
+ * 读取 10ms 周期内的编码器脉冲差值（只读 M2/M4, 减半 I2C 阻塞时间防 IMU FIFO 溢出）
+ * 结果存入 Encoder_Offset[1] (M2) 和 Encoder_Offset[3] (M4)
+ * 调试: 失败码存入 g_i2c_err_m2/m4, 供 OLED 显示定位
+ *
+ * 注: 驱动板返回的是 int16_t 有符号数, 需要先组装成 uint16_t 再转 int16_t
+ *     否则 buf[0]=0xFF 时 buf[0]<<8=0xFF00 (正数), 实际应为 -256
  */
 void Read_10_Enconder(void)
 {
     uint8_t buf[2];
 
-    motor_i2cRead(Motor_model_ADDR, READ_TEN_M1Enconer_REG, 2, buf);
-    Encoder_Offset[0] = buf[0] << 8 | buf[1];
+    g_i2c_err_m2 = motor_i2cRead(Motor_model_ADDR, READ_TEN_M2Enconer_REG, 2, buf);
+    if (g_i2c_err_m2 == 0) {
+        Encoder_Offset[1] = (int16_t)((uint16_t)buf[0] << 8 | buf[1]);
+    } else {
+        Encoder_Offset[1] = 0;
+    }
 
-    motor_i2cRead(Motor_model_ADDR, READ_TEN_M2Enconer_REG, 2, buf);
-    Encoder_Offset[1] = buf[0] << 8 | buf[1];
-
-    motor_i2cRead(Motor_model_ADDR, READ_TEN_M3Enconer_REG, 2, buf);
-    Encoder_Offset[2] = buf[0] << 8 | buf[1];
-
-    motor_i2cRead(Motor_model_ADDR, READ_TEN_M4Enconer_REG, 2, buf);
-    Encoder_Offset[3] = buf[0] << 8 | buf[1];
+    g_i2c_err_m4 = motor_i2cRead(Motor_model_ADDR, READ_TEN_M4Enconer_REG, 2, buf);
+    if (g_i2c_err_m4 == 0) {
+        Encoder_Offset[3] = (int16_t)((uint16_t)buf[0] << 8 | buf[1]);
+    } else {
+        Encoder_Offset[3] = 0;
+    }
 }
 
 /**

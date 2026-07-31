@@ -55,10 +55,22 @@ void IMU_UART_ParseByte(uint8_t rx_byte)
                 
                 // 1. 解析角度包 (0x53)
                 if (rx_buffer[1] == 0x53) {
-                    g_imu_data.Roll  = ((int16_t)(rx_buffer[3] << 8 | rx_buffer[2])) / 32768.0f * 180.0f;
-                    g_imu_data.Pitch = ((int16_t)(rx_buffer[5] << 8 | rx_buffer[4])) / 32768.0f * 180.0f;
-                    g_imu_data.Yaw   = ((int16_t)(rx_buffer[7] << 8 | rx_buffer[6])) / 32768.0f * 180.0f;
-                    
+                    float roll  = ((int16_t)(rx_buffer[3] << 8 | rx_buffer[2])) / 32768.0f * 180.0f;
+                    float pitch = ((int16_t)(rx_buffer[5] << 8 | rx_buffer[4])) / 32768.0f * 180.0f;
+                    float yaw   = ((int16_t)(rx_buffer[7] << 8 | rx_buffer[6])) / 32768.0f * 180.0f;
+
+                    /* 异常值过滤: JY61P 角度范围 ±180°, 超范围说明帧错位, 丢弃 */
+                    if (yaw > 180.0f || yaw < -180.0f ||
+                        roll > 180.0f || roll < -180.0f ||
+                        pitch > 180.0f || pitch < -180.0f) {
+                        rx_cnt = 0;
+                        return;
+                    }
+
+                    g_imu_data.Roll  = roll;
+                    g_imu_data.Pitch = pitch;
+                    g_imu_data.Yaw   = yaw;
+
                     // 标记角度数据已更新，主循环 PID 可根据此标志位进行控制
                     g_imu_data.update_flag = 1;
                 }

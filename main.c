@@ -161,7 +161,9 @@ void GROUP1_IRQHandler(void)
     {
         if (gpioA_status == GPIO_BUTTON_BTN_3_IIDX)
         {
-            if ((g_sys_tick - last_time_balance) > DEBOUNCE_TIME_MS)
+            /* 电平确认: 上拉按键, 按下=低电平, 振动误触发时电平为高, 忽略 */
+            if ((DL_GPIO_readPins(GPIO_BUTTON_BTN_3_PORT, GPIO_BUTTON_BTN_3_PIN) & GPIO_BUTTON_BTN_3_PIN) == 0 &&
+                (g_sys_tick - last_time_balance) > DEBOUNCE_TIME_MS)
             {
                 g_balance_task++;
                 if (g_balance_task >= 4)
@@ -171,7 +173,9 @@ void GROUP1_IRQHandler(void)
         }
         else if (gpioA_status == GPIO_BUTTON_BTN_1_IIDX)
         {
-            if ((g_sys_tick - last_time_end) > DEBOUNCE_TIME_MS)
+            /* 电平确认: 防转弯振动误触发BTN_1导致中断停车 */
+            if ((DL_GPIO_readPins(GPIO_BUTTON_BTN_1_PORT, GPIO_BUTTON_BTN_1_PIN) & GPIO_BUTTON_BTN_1_PIN) == 0 &&
+                (g_sys_tick - last_time_end) > DEBOUNCE_TIME_MS)
             {
                 g_running = false;
                 last_time_end = g_sys_tick;
@@ -185,7 +189,8 @@ void GROUP1_IRQHandler(void)
     {
         if (gpioB_status == GPIO_BUTTON_BTN_4_IIDX)
         {
-            if ((g_sys_tick - last_time_start) > DEBOUNCE_TIME_MS)
+            if ((DL_GPIO_readPins(GPIO_BUTTON_BTN_4_PORT, GPIO_BUTTON_BTN_4_PIN) & GPIO_BUTTON_BTN_4_PIN) == 0 &&
+                (g_sys_tick - last_time_start) > DEBOUNCE_TIME_MS)
             {
                 g_running = true;
                 last_time_start = g_sys_tick;
@@ -193,10 +198,13 @@ void GROUP1_IRQHandler(void)
         }
         else if (gpioB_status == GPIO_BUTTON_BTN_2_IIDX)
         {
-            if ((g_sys_tick - last_time_chassis) > DEBOUNCE_TIME_MS)
+            /* 运行中禁止切模式 + 电平确认(防转弯振动误触发) */
+            if (!g_running &&
+                (DL_GPIO_readPins(GPIO_BUTTON_BTN_2_PORT, GPIO_BUTTON_BTN_2_PIN) & GPIO_BUTTON_BTN_2_PIN) == 0 &&
+                (g_sys_tick - last_time_chassis) > DEBOUNCE_TIME_MS)
             {
                 g_chassis_task++;
-                if (g_chassis_task >= 3)
+                if (g_chassis_task >= ChassisTaskNum)
                     g_chassis_task = 0;
                 last_time_chassis = g_sys_tick;
             }

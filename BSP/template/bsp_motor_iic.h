@@ -43,6 +43,10 @@ typedef enum __Motor_IIC_ADDR_
 extern int Encoder_Offset[4];   /* 10ms 实时脉冲差值 */
 extern int Encoder_Now[4];      /* 累计脉冲总数 */
 
+/* I2C 调试: 最后一次读 M2/M4 编码器的返回值 (0=成功, 非0=失败码, -1=未读取) */
+extern volatile int g_i2c_err_m2;
+extern volatile int g_i2c_err_m4;
+
 void control_speed(int16_t m1, int16_t m2, int16_t m3, int16_t m4);
 void control_pwm(int16_t m1, int16_t m2, int16_t m3, int16_t m4);
 void Set_motor_type(uint8_t data);
