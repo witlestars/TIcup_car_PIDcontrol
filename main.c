@@ -32,6 +32,7 @@ int main(void)
     NVIC_EnableIRQ(GPIOB_INT_IRQn);
     NVIC_EnableIRQ(DMA_INT_IRQn);
     NVIC_EnableIRQ(UART_VOFA_INST_INT_IRQN);
+    NVIC_EnableIRQ(UART_Motor_INST_INT_IRQN);
 
     /* 3. 模块初始化 (测试 VOFA，暂时屏蔽其余外设)[cite: 9] */
     // IMU_Init();
@@ -50,8 +51,7 @@ int main(void)
     {
         // UART 中断只负责收包，命令解析放在主循环避免中断内阻塞。
         VOFA_CommandTask();
-        Balance_AngleEstimateTask();
-
+        Balance_MotorFeedbackTask();
         /* 10ms 控制节拍[cite: 9] */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10)
         {
@@ -174,7 +174,6 @@ void GROUP1_IRQHandler(void)
             if ((g_sys_tick - last_time_end) > DEBOUNCE_TIME_MS)
             {
                 g_running = false;
-                Balance_StartReturnToZero(BALANCE_RETURN_SPEED_DEFAULT);
                 last_time_end = g_sys_tick;
             }
         }
@@ -235,5 +234,30 @@ void DMA_IRQHandler(void)
         
         default:
             break;
+    }
+}
+
+void UART_Motor_INST_IRQHandler(void)
+{
+    uint32_t pending_irq = DL_UART_Main_getPendingInterrupt(UART_Motor_INST);
+
+    if (pending_irq == DL_UART_IIDX_RX)
+    {
+        while (DL_UART_Main_isRXFIFOEmpty(UART_Motor_INST) == false)
+        {
+            ZDT_Motor_RX_ByteCallback(&balance_motor,
+                                     DL_UART_Main_receiveData(UART_Motor_INST));
+        }
+    }
+    else if ((pending_irq == DL_UART_IIDX_OVERRUN_ERROR) ||
+             (pending_irq == DL_UART_IIDX_BREAK_ERROR) ||
+             (pending_irq == DL_UART_IIDX_FRAMING_ERROR) ||
+             (pending_irq == DL_UART_IIDX_PARITY_ERROR))
+    {
+        DL_UART_Main_clearInterruptStatus(UART_Motor_INST,
+                                          (DL_UART_INTERRUPT_OVERRUN_ERROR |
+                                           DL_UART_INTERRUPT_BREAK_ERROR |
+                                           DL_UART_INTERRUPT_FRAMING_ERROR |
+                                           DL_UART_INTERRUPT_PARITY_ERROR));
     }
 }

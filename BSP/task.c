@@ -10,6 +10,9 @@
 #include "motor.h"
 #include "oled.h"
 #include "imu.h"
+#include "vision_protocol.h"
+#include "vofa.h"
+#include "ZDT_X42S_Driver.h"
 
 #define AB_DISTANCE_MM 1500   /* A→B 距离 (mm), 实测 1.5m */
 #define AB_TIME_LIMIT_MS 8000 /* A→B 超时限制 (ms) */
@@ -21,7 +24,7 @@ volatile bool g_running = false;                      // 任务运行标志位
 
 // 用于统计任务运行时间
 static uint32_t task_start_tick = 0; // 任务开始时间戳
-extern uint32_t g_sys_tick;          // 全局系统时基 (ms)
+extern uint32_t volatile g_sys_tick;          // 全局系统时基 (ms)
 static bool first_time = true;
 
 void Chassis_Task()
@@ -84,10 +87,45 @@ void Chassis_Task()
     }
 }
 
-// 平衡任务占位 (板球系统 PID + 陀螺仪前馈, 待实现)
+// 平衡任务
 void Balance_Task(void)
 {
-    /* TODO: 按 g_balance_task 分支实现 Balance_0/1/2 */
+    // 只有在全局运行标志为 true 时才执行控制
+    if (g_running == true) 
+    {
+            /* --- 1. 目标设定 --- */
+            float target_pos = 0.0f; // 调参时，目标位置固定在物理中心 (0 mm)
+
+            /* --- 2. 传感器数据预处理 --- */
+            // 将视觉回传的 0.1mm 单位转换为 mm
+            float vision_pos = g_vision_data.position_01mm / 10.0f; 
+            // 直接读取 K230 传回的真实速度 (mm/s)
+            float vision_vel = g_vision_data.velocity_mm_s;
+            // 读取 K230 数据包中的延时标签 (ms)
+            uint16_t age_ms  = g_vision_data.age_ms;
+            
+            // 读取陀螺仪角速度 (请根据你实际安装的方向选择 Gyro_X 或 Gyro_Y)
+            float gyro_rate  = g_imu_data.GyroY; 
+
+            /* --- 3. 调用核心控制算法 --- */
+            // 该函数内部已包含 "延时推算补偿" 和 "视觉真实速度替换微分" 逻辑
+            Balance_PID(target_pos, vision_pos, vision_vel, age_ms, gyro_rate);
+
+            /* --- 4. VOFA+ 实时波形反馈 (DMA 触发) --- */
+            // 计算用于可视化的预测位置
+            float predicted_pos = vision_pos + (vision_vel * (age_ms / 1000.0f));
+            
+            // 根据 vofa.c 中定义的接口，发送 3 个关键浮点数据[cite: 6, 7]
+            // CH0(target):  目标位置
+            // CH1(current): 补偿后的预测位置 (观察回中平滑度)
+            // CH2(output):  真实视觉速度 (观察阻尼效果与抖动)
+            VOFA_SendWaveData(target_pos, predicted_pos, vision_vel); 
+    }
+    else 
+    {
+        // 如果 g_running 为 false，作为安全兜底，强制停机[cite: 8]
+        Balance_MotorSetSpeed(0); 
+    }
 }
 
 // 在主循环中以100ms为周期调度
