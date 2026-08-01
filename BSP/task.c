@@ -27,6 +27,9 @@ volatile bool g_running = false;                      // 任务运行标志位
 
 // 用于统计任务运行时间
 static uint32_t task_start_tick = 0; // 任务开始时间戳
+static uint32_t task_finish_time_ms[ChassisTaskNum] = {0}; // 各题最近一次用时
+static ChassisTask_e running_task = Chassis_stop; // 本次启动时选择的题目
+static ChassisTask_e last_finished_task = Chassis_stop; // 最近结束的题目
 extern uint32_t g_sys_tick;          // 全局系统时基 (ms)
 static bool first_time = true;
 
@@ -87,6 +90,7 @@ void Chassis_Task()
         {
             // 任务启动更新当前任务时间
             task_start_tick = g_sys_tick;
+            running_task = g_chassis_task;
             Odom_Init();  /* 清零里程计, 防止上次里程累加 */
             Track_Reset();  /* 复位巡线状态(curve_in_curve等) */
             Task_ApplyConfig(g_chassis_task);  /* 根据CAR模式设置PD参数 */
@@ -184,9 +188,26 @@ void Chassis_Task()
             Motor_Stop();
             break;
         }
+
+        if (g_running == false && running_task > Chassis_stop &&
+            running_task < ChassisTaskNum)
+        {
+            task_finish_time_ms[running_task] =
+                (uint32_t)(g_sys_tick - task_start_tick);
+            last_finished_task = running_task;
+            first_time = true;
+        }
     }
     else {
         Motor_Stop();
+        /* 按键手动停止时，在下一个控制周期锁存本题用时。 */
+        if (first_time == false && running_task > Chassis_stop &&
+            running_task < ChassisTaskNum)
+        {
+            task_finish_time_ms[running_task] =
+                (uint32_t)(g_sys_tick - task_start_tick);
+            last_finished_task = running_task;
+        }
         first_time = true;
     }
 }
@@ -220,8 +241,24 @@ void OLED_Task()
                   (int)Odom_Get_Edge_Dist(),
                   (int)Odom_Get_Total_Dist());
 
-    // 第四行：显示当前Yaw + 弯道模式(0直道/1弯道), 用于调试弯道检测
-    OLED_PrintfAt(3, 0, "Y:%4d M:%d",
-                  (int)g_imu_data.Yaw,
-                  (int)g_dbg.state);
+    OLED_ClearArea(3, 0, 16);
+    if (g_running == true)
+    {
+        uint32_t elapsed_ms = (uint32_t)(g_sys_tick - task_start_tick);
+        OLED_PrintfAt(3, 0, "C%d T:%lu.%02lu",
+                      (int)running_task,
+                      (unsigned long)(elapsed_ms / 1000U),
+                      (unsigned long)((elapsed_ms % 1000U) / 10U));
+    }
+    else
+    {
+        ChassisTask_e display_task =
+            (g_chassis_task != Chassis_stop) ?
+            g_chassis_task : last_finished_task;
+        uint32_t finish_ms = task_finish_time_ms[display_task];
+        OLED_PrintfAt(3, 0, "C%d T:%lu.%02lu",
+                      (int)display_task,
+                      (unsigned long)(finish_ms / 1000U),
+                      (unsigned long)((finish_ms % 1000U) / 10U));
+    }
 }
