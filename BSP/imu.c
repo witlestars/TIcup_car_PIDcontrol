@@ -4,6 +4,12 @@
 /* 定义全局 IMU 数据结构体 */
 volatile IMU_Data_t g_imu_data = {0};
 
+#define IMU_RX_QUEUE_SIZE 128U
+
+static uint8_t s_imu_rx_queue[IMU_RX_QUEUE_SIZE];
+static volatile uint16_t s_imu_rx_head = 0;
+static volatile uint16_t s_imu_rx_tail = 0;
+
 /**
  * @brief  IMU 模块初始化 (软件层面)
  * @note   硬件 UART 初始化已由 SysConfig 自动生成的 SYSCFG_DL_init() 完成
@@ -15,14 +21,37 @@ void IMU_Init(void)
     g_imu_data.Pitch = 0.0f;
     g_imu_data.Yaw = 0.0f;
     g_imu_data.update_flag = 0;
+    s_imu_rx_head = 0;
+    s_imu_rx_tail = 0;
     // 使能 UART 接收中断，确保接收到的字节能触发中断并调用解析函数
     NVIC_EnableIRQ(UART_IMU_INST_INT_IRQN);
+}
+
+void IMU_RX_ByteCallback(uint8_t rx_byte)
+{
+    uint16_t next_head = (uint16_t)((s_imu_rx_head + 1U) % IMU_RX_QUEUE_SIZE);
+
+    if (next_head != s_imu_rx_tail)
+    {
+        s_imu_rx_queue[s_imu_rx_head] = rx_byte;
+        s_imu_rx_head = next_head;
+    }
+}
+
+void IMU_ParseTask(void)
+{
+    while (s_imu_rx_tail != s_imu_rx_head)
+    {
+        uint8_t rx_byte = s_imu_rx_queue[s_imu_rx_tail];
+        s_imu_rx_tail = (uint16_t)((s_imu_rx_tail + 1U) % IMU_RX_QUEUE_SIZE);
+        IMU_UART_ParseByte(rx_byte);
+    }
 }
 
 /**
  * @brief  IMU 串口数据解析函数 (状态机)
  * @param  rx_byte: 串口单次接收到的 1 个字节数据
- * @note   !!! 此函数必须放置在 UART 接收中断服务函数 (RX ISR) 内部运行 !!!
+ * @note   由主循环中的 IMU_ParseTask 调用，不在 UART 中断中执行浮点解析
  */
 void IMU_UART_ParseByte(uint8_t rx_byte)
 {

@@ -11,6 +11,9 @@
 #include "bsp_motor_iic.h"  /* Encoder_Offset, g_i2c_err_m2/m4 调试 */
 #include "oled.h"
 #include "imu.h"
+#include "vision_protocol.h"
+#include "vofa.h"
+#include "ZDT_X42S_Driver.h"
 
 #define AB_DISTANCE_MM   1500   /* CAR3: A→B 距离 (mm) */
 #define AB_TIME_LIMIT_MS 8000   /* CAR3: A→B 超时 (ms) */
@@ -19,6 +22,9 @@
 #define LAP_TIME_LIMIT_CAR45  30000  /* CAR4/5 一圈超时 30s */
 #define LAP_MIN_CORNER     2      /* 至少过2个弯才算一圈 */
 #define FINISH_LINE_DIST_MM  6400.0f  /* 终止线总里程阈值(同track.c LAP_PERIMETER_MM) */
+
+/* Flip this sign if the velocity loop accelerates the ball instead of braking. */
+#define BALANCE_VELOCITY_ANGLE_SIGN  (-1.0f)
 
 // 在按钮中断中修改标志位
 volatile ChassisTask_e g_chassis_task = Chassis_stop; // 小车任务标志位
@@ -30,7 +36,7 @@ static uint32_t task_start_tick = 0; // 任务开始时间戳
 static uint32_t task_finish_time_ms[ChassisTaskNum] = {0}; // 各题最近一次用时
 static ChassisTask_e running_task = Chassis_stop; // 本次启动时选择的题目
 static ChassisTask_e last_finished_task = Chassis_stop; // 最近结束的题目
-extern uint32_t g_sys_tick;          // 全局系统时基 (ms)
+extern uint32_t volatile g_sys_tick;          // 全局系统时基 (ms)
 static bool first_time = true;
 
 /* 纯灰度检测停车: 起步在终止线上全亮 → 走出终止线(不全亮) → 回到终止线全亮才停 */
@@ -212,10 +218,120 @@ void Chassis_Task()
     }
 }
 
-// 平衡任务占位 (板球系统 PID + 陀螺仪前馈, 待实现)
+
+void Balance_PID()
+{
+    float current_velocity_mm_s = (float)g_vision_data.velocity_mm_s;
+    if (current_velocity_mm_s >= -2.0f && current_velocity_mm_s <= 2.0f)
+    {
+        current_velocity_mm_s = 0.0f;
+    }
+
+    float target_velocity_mm_s = PID_Calcula(&g_pos_pid,
+                                              target_position_mm,
+                                              current_position_mm,
+                                              current_velocity_mm_s,
+                                              0.0f,
+                                              0.01f);
+    float target_angle = PID_Calcula(&g_vel_pid,
+                                     target_velocity_mm_s,
+                                     current_velocity_mm_s,
+                                     0.0f,
+                                     0.0f,
+                                     0.01f);
+    float current_angle = Balance_GetMotorAngle();
+
+    target_angle *= BALANCE_VELOCITY_ANGLE_SIGN;
+    if (target_angle > 14.0f)
+    {
+        target_angle = 14.0f;
+    }
+    else if (target_angle < -6.0f)
+    {
+        target_angle = -6.0f;
+    }
+
+    pid_output = PID_Calcula(&g_angle_pid,
+                             target_angle,
+                             current_angle,
+                             0.0f,
+                             0.0f,
+                             0.01f);
+
+    Balance_MotorSetSpeed((int16_t)pid_output);
+}
+
+
+
+// 平衡任务
 void Balance_Task(void)
 {
-    /* TODO: 按 g_balance_task 分支实现 Balance_0/1/2 */
+    static bool motor_stop_sent = false;
+    
+    /* 调参期间暂时屏蔽不用的变量，防止编译警告[cite: 3]
+    float target_pos;
+    float vision_pos;
+    float vision_vel;
+    float gyro_rate;
+    float predicted_pos;
+    uint16_t age_ms;
+    uint32_t local_delay_ms;
+    */
+    float pid_output;
+
+    if (!g_running || g_balance_task == Balance_stop)
+    {
+        g_pos_pid.error_sum = 0.0f;
+        g_vel_pid.error_sum = 0.0f;
+        g_angle_pid.error_sum = 0.0f;
+        if (!motor_stop_sent && Balance_MotorSetSpeed(0) == 0)
+        {
+            motor_stop_sent = true;
+        }
+        return;
+    }
+
+    if (!g_balance_motor_feedback_valid)
+    {
+        g_angle_pid.error_sum = 0.0f;
+        g_angle_pid.last_error = 0.0f;
+        if (!motor_stop_sent && Balance_MotorSetSpeed(0) == 0)
+        {
+            motor_stop_sent = true;
+        }
+        return;
+    }
+
+    motor_stop_sent = false;
+
+    /* 位置外环调参：目标位置固定在平台中心 0 mm。 */
+    const float target_position_mm = 0.0f;
+    float current_position_mm =
+        (float)g_vision_data.position_01mm / 10.0f;
+    uint32_t vision_delay_ms =
+        (uint32_t)(g_sys_tick - g_vision_data.last_update_tick);
+
+    if (g_vision_data.target_found == 0U || vision_delay_ms > 250U)
+    {
+        g_pos_pid.error_sum = 0.0f;
+        g_pos_pid.last_error = 0.0f;
+        g_vel_pid.error_sum = 0.0f;
+        g_vel_pid.last_error = 0.0f;
+        g_angle_pid.error_sum = 0.0f;
+        g_angle_pid.last_error = 0.0f;
+        Balance_MotorSetSpeed(0);
+        VOFA_SendWaveData(target_position_mm,
+                          current_position_mm,
+                          (g_vision_data.target_found == 0U) ? -100.0f : -200.0f);
+        return;
+    }
+
+    Balance_PID();
+
+    /* Position-loop tuning: target position, measured position, target velocity. */
+    VOFA_SendWaveData(target_position_mm,
+                      current_position_mm,
+                      target_velocity_mm_s);
 }
 
 // 在主循环中以100ms为周期调度
@@ -262,3 +378,4 @@ void OLED_Task()
                       (unsigned long)((finish_ms % 1000U) / 10U));
     }
 }
+
