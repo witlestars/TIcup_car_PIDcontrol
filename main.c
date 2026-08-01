@@ -53,7 +53,10 @@ int main(void)
         VOFA_CommandTask();
         IMU_ParseTask();
         Vision_ParseTask();
+
+        /* Angle query gets the motor UART before the periodic speed command. */
         Balance_MotorFeedbackTask();
+
         /* 10ms 控制节拍[cite: 9] */
         if ((uint32_t)(g_sys_tick - last_10ms) >= 10)
         {
@@ -61,8 +64,6 @@ int main(void)
             Balance_Task();
 
         }
-
-        /* 100ms 节拍[cite: 9] */
         if ((uint32_t)(g_sys_tick - last_100ms) >= 100)
         {
         
@@ -253,8 +254,8 @@ void UART_Motor_INST_IRQHandler(void)
     {
         while (DL_UART_Main_isRXFIFOEmpty(UART_Motor_INST) == false)
         {
-            ZDT_Motor_RX_ByteCallback(&balance_motor,
-                                     DL_UART_Main_receiveData(UART_Motor_INST));
+            Balance_MotorRXByteCallback(
+                DL_UART_Main_receiveData(UART_Motor_INST));
         }
     }
     else if ((pending_irq == DL_UART_IIDX_OVERRUN_ERROR) ||
@@ -269,3 +270,4 @@ void UART_Motor_INST_IRQHandler(void)
                                            DL_UART_INTERRUPT_PARITY_ERROR));
     }
 }
+

@@ -81,6 +81,7 @@ int ZDT_Motor_SetControlMode(ZDT_MotorTypeDef *motor, ZDT_ControlMode_e mode);
 void ZDT_Motor_SetTargetPosition(ZDT_MotorTypeDef *motor, float angle, uint16_t speed);
 int ZDT_Motor_ChangeID(ZDT_MotorTypeDef *motor, uint8_t new_id);
 int ZDT_Motor_SetMode(ZDT_MotorTypeDef *motor, bool closed_loop);
+int ZDT_Motor_ReadPosition(ZDT_MotorTypeDef *motor);
 
 #ifdef __cplusplus
 }

@@ -222,6 +222,20 @@ int ZDT_Motor_SetMode(ZDT_MotorTypeDef *motor, bool closed_loop)
     return ZDT_Motor_SendCommand(motor, cmd, 6);
 }
 
+int ZDT_Motor_ReadPosition(ZDT_MotorTypeDef *motor)
+{
+    static uint8_t cmd[3];
+
+    if (motor == NULL) {
+        return -1;
+    }
+
+    cmd[0] = motor->motor_id;
+    cmd[1] = 0x36;
+    cmd[2] = 0x6B;
+    return ZDT_Motor_SendCommand(motor, cmd, 3);
+}
+
 int ZDT_Motor_SetControlMode(ZDT_MotorTypeDef *motor, ZDT_ControlMode_e mode)
 {
     if (motor == NULL) return -1;

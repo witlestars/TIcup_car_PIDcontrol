@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include "task.h"
 #include "balance.h"
-#include "balance_segmented.h"
 #include "track.h"
 #include "odometry.h"
 #include "motor.h"
@@ -23,6 +22,9 @@
 #define LAP_TIME_LIMIT_CAR45  30000  /* CAR4/5 一圈超时 30s */
 #define LAP_MIN_CORNER     2      /* 至少过2个弯才算一圈 */
 #define FINISH_LINE_DIST_MM  6400.0f  /* 终止线总里程阈值(同track.c LAP_PERIMETER_MM) */
+
+/* Flip this sign if the velocity loop accelerates the ball instead of braking. */
+#define BALANCE_VELOCITY_ANGLE_SIGN  (1.0f)
 
 // 在按钮中断中修改标志位
 volatile ChassisTask_e g_chassis_task = Chassis_stop; // 小车任务标志位
@@ -198,101 +200,82 @@ void Chassis_Task()
 // 平衡任务
 void Balance_Task(void)
 {
-    static BalanceTask_e last_task = BalanceTaskNum;
-    static bool segmented_initialized = false;
+    static bool motor_stop_sent = false;
+    
+    /* 调参期间暂时屏蔽不用的变量，防止编译警告[cite: 3]
     float target_pos;
     float vision_pos;
     float vision_vel;
     float gyro_rate;
     float predicted_pos;
-    float pid_output;
     uint16_t age_ms;
     uint32_t local_delay_ms;
-
-    if (!segmented_initialized)
-    {
-        SegmentedBalance_Init();
-        segmented_initialized = true;
-    }
-
-    Balance_AngleEstimateTask();
+    */
+    float pid_output;
 
     if (!g_running || g_balance_task == Balance_stop)
     {
-        if (SegmentedBalance_IsActive())
+        g_pos_pid.error_sum = 0.0f;
+        g_vel_pid.error_sum = 0.0f;
+        g_angle_pid.error_sum = 0.0f;
+        if (!motor_stop_sent && Balance_MotorSetSpeed(0) == 0)
         {
-            SegmentedBalance_Stop();
+            motor_stop_sent = true;
         }
-        g_balance_pid.error_sum = 0.0f;
-        Balance_MotorSetSpeed(0);
-        last_task = BalanceTaskNum;
         return;
     }
 
-    if (g_balance_task != last_task)
+    if (!g_balance_motor_feedback_valid)
     {
-        SegmentedBalance_Stop();
-        g_balance_pid.error_sum = 0.0f;
-        g_balance_pid.last_error = 0.0f;
-
-        switch (g_balance_task)
+        g_angle_pid.error_sum = 0.0f;
+        g_angle_pid.last_error = 0.0f;
+        if (!motor_stop_sent && Balance_MotorSetSpeed(0) == 0)
         {
-        case Balance_0:
-            SegmentedBalance_StartChallenge3();
-            break;
-
-        case Balance_2:
-            if (g_vision_data.target_found != 0U)
-            {
-                target_pos = (float)g_vision_data.position_01mm / 10.0f;
-            }
-            else
-            {
-                target_pos = 0.0f;
-            }
-            SegmentedBalance_StartHold(target_pos);
-            break;
-
-        case Balance_1:
-        default:
-            break;
+            motor_stop_sent = true;
         }
-
-        last_task = g_balance_task;
-    }
-
-    if (g_balance_task == Balance_0 || g_balance_task == Balance_2)
-    {
-        SegmentedBalance_Task();
         return;
     }
 
-    target_pos = 0.0f;
-    vision_pos = (float)g_vision_data.position_01mm / 10.0f;
-    vision_vel = (float)g_vision_data.velocity_mm_s;
-    age_ms = g_vision_data.age_ms;
-    gyro_rate = g_imu_data.GyroY;
-    local_delay_ms =
+    motor_stop_sent = false;
+
+    /* 速度中环调参：目标速度固定为 0，手推小球观察制动效果。 */
+    const float target_velocity_mm_s = 0.0f;
+    uint32_t vision_delay_ms =
         (uint32_t)(g_sys_tick - g_vision_data.last_update_tick);
 
-    if (local_delay_ms > 250U || g_vision_data.target_found == 0U)
+    if (g_vision_data.target_found == 0U || vision_delay_ms > 250U)
     {
-        g_balance_pid.error_sum = 0.0f;
+        g_vel_pid.error_sum = 0.0f;
+        g_vel_pid.last_error = 0.0f;
+        g_angle_pid.error_sum = 0.0f;
+        g_angle_pid.last_error = 0.0f;
         Balance_MotorSetSpeed(0);
         return;
     }
 
-    predicted_pos = vision_pos +
-        vision_vel * ((float)(age_ms + local_delay_ms) / 1000.0f);
-    pid_output = Balance_PID(&g_balance_pid,
-                             target_pos,
-                             predicted_pos,
-                             vision_vel,
-                             gyro_rate,
+    float current_velocity_mm_s = (float)g_vision_data.velocity_mm_s;
+    float target_angle = PID_Calcula(&g_vel_pid,
+                                     target_velocity_mm_s,
+                                     current_velocity_mm_s,
+                                     0.0f,
+                                     0.0f,
+                                     0.01f);
+    float current_angle = Balance_GetMotorAngle();
+
+    target_angle *= BALANCE_VELOCITY_ANGLE_SIGN;
+    pid_output = PID_Calcula(&g_angle_pid,
+                             target_angle,
+                             current_angle,
+                             0.0f,
+                             0.0f,
                              0.01f);
+
     Balance_MotorSetSpeed((int16_t)pid_output);
 
-    VOFA_SendWaveData(target_pos, predicted_pos, vision_vel);
+    /* CH0: target velocity, CH1: measured velocity, CH2: target angle. */
+    VOFA_SendWaveData(target_velocity_mm_s,
+                      current_velocity_mm_s,
+                      target_angle);
 }
 
 // 在主循环中以100ms为周期调度

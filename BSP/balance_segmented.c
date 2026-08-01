@@ -208,8 +208,6 @@ void SegmentedBalance_Task(void)
     float position_error_mm;
     float speed_error_mm_s;
 
-    Balance_AngleEstimateTask();
-
     if (s_status.mode == SEG_BALANCE_MODE_STOP) {
         Balance_MotorSetSpeed(0);
         return;

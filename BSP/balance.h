@@ -26,19 +26,30 @@ typedef struct {
 #define BALANCE_RETURN_SPEED_DEFAULT     (15)
 #define BALANCE_ZERO_TOLERANCE_DEG       (0.2f)
 
-extern volatile Balance_PID_t g_balance_pid;
+
+extern volatile Balance_PID_t g_pos_pid;    // 位置外环
+extern volatile Balance_PID_t g_vel_pid;    // 速度中环
+extern volatile Balance_PID_t g_angle_pid;  // 角度内环
+
+
 extern volatile float g_balance_motor_angle_deg;
 extern volatile bool g_balance_angle_limit_active;
+extern volatile bool g_balance_motor_feedback_valid;
+extern volatile uint32_t g_balance_motor_feedback_tick;
 
 void Balance_Init(void);
 int Balance_MotorSetSpeed(int16_t speed);
 void Balance_SetAngleLimits(float min_angle_deg, float max_angle_deg);
 float Balance_GetMotorAngle(void);
-void Balance_AngleEstimateTask(void);
+void Balance_MotorRXByteCallback(uint8_t data);
+void Balance_MotorFeedbackTask(void);
 void Balance_StartReturnToZero(int16_t speed);
 void Balance_CancelReturnToZero(void);
 bool Balance_IsReturningToZero(void);
 bool Balance_ReturnToZeroTask(void);
+
+// 串级pid集成
+void Balance_PID();
 
 /**
  * @brief  平衡控制核心任务 (含延时补偿与真实速度微分)
@@ -49,7 +60,7 @@ bool Balance_ReturnToZeroTask(void);
  * @param  gyro_rate   陀螺仪当前输出的角速度
  */
 /* Generic PID; all gains and runtime state come from the passed object. */
-float Balance_PID(volatile Balance_PID_t *pid, float target,
+float PID_Calcula(volatile Balance_PID_t *pid, float target,
                   float feedback, float feedback_rate,
                   float feedforward, float dt_s);
 
