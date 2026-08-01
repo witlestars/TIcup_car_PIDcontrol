@@ -146,7 +146,7 @@ void UART_VOFA_INST_IRQHandler(void)
     }
 }
 
-#define DEBOUNCE_TIME_MS 200
+#define DEBOUNCE_TIME_MS 250
 // 按键中断处理函数[cite: 9]
 void GROUP1_IRQHandler(void)
 {

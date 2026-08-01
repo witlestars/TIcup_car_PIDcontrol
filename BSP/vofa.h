@@ -6,7 +6,9 @@
 #include "balance.h"
 
 // 声明外部的 PID 变量 (根据你的实际命名修改)
-extern volatile Balance_PID_t g_balance_pid;
+extern volatile Balance_PID_t g_pos_pid;
+extern volatile Balance_PID_t g_vel_pid;
+extern volatile Balance_PID_t g_angle_pid;
 
 extern volatile bool g_vofa_tx_busy;
 

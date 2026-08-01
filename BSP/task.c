@@ -24,7 +24,7 @@
 #define FINISH_LINE_DIST_MM  6400.0f  /* 终止线总里程阈值(同track.c LAP_PERIMETER_MM) */
 
 /* Flip this sign if the velocity loop accelerates the ball instead of braking. */
-#define BALANCE_VELOCITY_ANGLE_SIGN  (1.0f)
+#define BALANCE_VELOCITY_ANGLE_SIGN  (-1.0f)
 
 // 在按钮中断中修改标志位
 volatile ChassisTask_e g_chassis_task = Chassis_stop; // 小车任务标志位
@@ -197,6 +197,51 @@ void Chassis_Task()
     }
 }
 
+
+void Balance_PID()
+{
+    float current_velocity_mm_s = (float)g_vision_data.velocity_mm_s;
+    if (current_velocity_mm_s >= -2.0f && current_velocity_mm_s <= 2.0f)
+    {
+        current_velocity_mm_s = 0.0f;
+    }
+
+    float target_velocity_mm_s = PID_Calcula(&g_pos_pid,
+                                              target_position_mm,
+                                              current_position_mm,
+                                              current_velocity_mm_s,
+                                              0.0f,
+                                              0.01f);
+    float target_angle = PID_Calcula(&g_vel_pid,
+                                     target_velocity_mm_s,
+                                     current_velocity_mm_s,
+                                     0.0f,
+                                     0.0f,
+                                     0.01f);
+    float current_angle = Balance_GetMotorAngle();
+
+    target_angle *= BALANCE_VELOCITY_ANGLE_SIGN;
+    if (target_angle > 14.0f)
+    {
+        target_angle = 14.0f;
+    }
+    else if (target_angle < -6.0f)
+    {
+        target_angle = -6.0f;
+    }
+
+    pid_output = PID_Calcula(&g_angle_pid,
+                             target_angle,
+                             current_angle,
+                             0.0f,
+                             0.0f,
+                             0.01f);
+
+    Balance_MotorSetSpeed((int16_t)pid_output);
+}
+
+
+
 // 平衡任务
 void Balance_Task(void)
 {
@@ -238,44 +283,34 @@ void Balance_Task(void)
 
     motor_stop_sent = false;
 
-    /* 速度中环调参：目标速度固定为 0，手推小球观察制动效果。 */
-    const float target_velocity_mm_s = 0.0f;
+    /* 位置外环调参：目标位置固定在平台中心 0 mm。 */
+    const float target_position_mm = 0.0f;
+    float current_position_mm =
+        (float)g_vision_data.position_01mm / 10.0f;
     uint32_t vision_delay_ms =
         (uint32_t)(g_sys_tick - g_vision_data.last_update_tick);
 
     if (g_vision_data.target_found == 0U || vision_delay_ms > 250U)
     {
+        g_pos_pid.error_sum = 0.0f;
+        g_pos_pid.last_error = 0.0f;
         g_vel_pid.error_sum = 0.0f;
         g_vel_pid.last_error = 0.0f;
         g_angle_pid.error_sum = 0.0f;
         g_angle_pid.last_error = 0.0f;
         Balance_MotorSetSpeed(0);
+        VOFA_SendWaveData(target_position_mm,
+                          current_position_mm,
+                          (g_vision_data.target_found == 0U) ? -100.0f : -200.0f);
         return;
     }
 
-    float current_velocity_mm_s = (float)g_vision_data.velocity_mm_s;
-    float target_angle = PID_Calcula(&g_vel_pid,
-                                     target_velocity_mm_s,
-                                     current_velocity_mm_s,
-                                     0.0f,
-                                     0.0f,
-                                     0.01f);
-    float current_angle = Balance_GetMotorAngle();
+    Balance_PID();
 
-    target_angle *= BALANCE_VELOCITY_ANGLE_SIGN;
-    pid_output = PID_Calcula(&g_angle_pid,
-                             target_angle,
-                             current_angle,
-                             0.0f,
-                             0.0f,
-                             0.01f);
-
-    Balance_MotorSetSpeed((int16_t)pid_output);
-
-    /* CH0: target velocity, CH1: measured velocity, CH2: target angle. */
-    VOFA_SendWaveData(target_velocity_mm_s,
-                      current_velocity_mm_s,
-                      target_angle);
+    /* Position-loop tuning: target position, measured position, target velocity. */
+    VOFA_SendWaveData(target_position_mm,
+                      current_position_mm,
+                      target_velocity_mm_s);
 }
 
 // 在主循环中以100ms为周期调度
@@ -306,3 +341,4 @@ void OLED_Task()
                   (int)g_imu_data.Yaw,
                   (int)g_dbg.state);
 }
+

@@ -56,8 +56,8 @@ void Balance_Init(void)
     g_pos_pid.Kff = 0.0f;
     g_pos_pid.error_sum = 0.0f;
     g_pos_pid.last_error = 0.0f;
-    g_pos_pid.out_max = 200.0f;      // 限幅：平板倾斜时，期望小球的最大速度 (mm/s)
-    g_pos_pid.integral_max = 50.0f;  // 积分限幅防饱和
+    g_pos_pid.out_max = 1500.0f;       // 外环调参时先限制目标速度为 +/-50 mm/s
+    g_pos_pid.integral_max = 300.0f;  // 积分限幅防饱和
 
     /* 
      * ========================================================
@@ -66,13 +66,13 @@ void Balance_Init(void)
      * 输出：期望的平板倾角 (度)
      * ========================================================
      */
-    g_vel_pid.Kp = 0.0f;
+    g_vel_pid.Kp = 35.0f;
     g_vel_pid.Ki = 0.0f;
     g_vel_pid.Kd = 0.0f;
     g_vel_pid.Kff = 0.0f;
     g_vel_pid.error_sum = 0.0f;
     g_vel_pid.last_error = 0.0f;
-    g_vel_pid.out_max = 5.0f;        // 速度环调参时先限制平板倾角为 +/-5 度
+    g_vel_pid.out_max = 14.0f;       // 最终在 Balance_Task 中限制为 -6 到 +14 度
     g_vel_pid.integral_max = 5.0f;   // 速度环一般不加积分，或者积分极小
 
     /* 
@@ -88,7 +88,7 @@ void Balance_Init(void)
     g_angle_pid.Kff = 0.0f;
     g_angle_pid.error_sum = 0.0f;
     g_angle_pid.last_error = 0.0f;
-    g_angle_pid.out_max = 200.0f;    // 限幅：电机的最大转速，根据你的 ZDT_X42S 步进电机性能设置
+    g_angle_pid.out_max = 300.0f;    // 限幅：电机的最大转速，根据你的 ZDT_X42S 步进电机性能设置
     g_angle_pid.integral_max = 50.0f;// 积分限幅
 
 

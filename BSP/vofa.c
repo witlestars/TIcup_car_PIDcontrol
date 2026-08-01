@@ -117,22 +117,22 @@ void VOFA_ParseCommand(uint8_t *rx_buf, uint16_t len)
     // 强制使用 strncmp + atof，避开 sscanf 的浮点坑
     if (strncmp(cmdStr, "PP=", 3) == 0) 
     {
-        g_balance_pid.Kp = atof(cmdStr + 3);
+        g_pos_pid.Kp = atof(cmdStr + 3);
         // VOFA_SendString("-> Success: Kp updated!\n");
     } 
     else if (strncmp(cmdStr, "PI=", 3) == 0) 
     {
-        g_balance_pid.Ki = atof(cmdStr + 3);
+        g_pos_pid.Ki = atof(cmdStr + 3);
         // VOFA_SendString("-> Success: Ki updated!\n");
     } 
     else if (strncmp(cmdStr, "PD=", 3) == 0) 
     {
-        g_balance_pid.Kd = atof(cmdStr + 3);
+        g_pos_pid.Kd = atof(cmdStr + 3);
         // VOFA_SendString("-> Success: Kd updated!\n");
     }
     else if (strncmp(cmdStr, "PF=", 3) == 0)
     {
-        g_balance_pid.Kff = atof(cmdStr + 3);
+        g_pos_pid.Kff = atof(cmdStr + 3);
         // VOFA_SendString("-> Success: Kff updated!\n");
     }
     else 
